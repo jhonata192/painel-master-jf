@@ -1,18 +1,9 @@
 import type {
   Agent,
-  ChatSession,
-  Issue,
   Approval,
   SessionData,
-  ChatResponse,
   SendMessageRequest,
   SendMessageResponse,
-  CreateChatRequest,
-  CreateChatResponse,
-  ListChatsResponse,
-  ListAgentsResponse,
-  ListIssuesResponse,
-  ListApprovalsResponse,
   CreateApprovalRequest,
   UpdateApprovalRequest,
   ApiError,
@@ -32,7 +23,6 @@ class ApiClient {
         'Content-Type': 'application/json',
         ...options.headers,
       },
-      credentials: 'include',
     })
 
     if (!response.ok) {
@@ -57,84 +47,154 @@ class ApiClient {
     return this.request<SessionData>('/auth/get-session')
   }
 
+  // Paperclip retorna lista direta de agentes
   async getAgents(companyId: string): Promise<Agent[]> {
-    const response = await this.request<ListAgentsResponse>(
+    const data = await this.request<Agent[] | { agents?: Agent[] }>(
       `/companies/${companyId}/agents`
     )
-    return response.agents
+    const list = Array.isArray(data) ? data : (data as any).agents ?? []
+    return list.map((a: any) => ({
+      id: a.id,
+      name: a.name,
+      role: a.role ?? '',
+      title: a.title ?? '',
+      description: a.title ?? a.role ?? '',
+      avatar: a.avatarUrl ?? null,
+      icon: a.icon ?? null,
+      status: a.status ?? 'idle',
+      ref: a.urlKey ?? a.id,
+    }))
   }
 
-  async getChats(companyId: string, agentRef: string): Promise<ChatSession[]> {
-    const response = await this.request<ListChatsResponse>(
-      `/companies/${companyId}/chats/${agentRef}`
+  async getIssues(companyId: string): Promise<any[]> {
+    const data = await this.request<any>(
+      `/companies/${companyId}/issues?limit=50`
     )
-    return response.sessions
+    const list = Array.isArray(data) ? data : data.issues ?? data.items ?? []
+    return list.map((i: any) => ({
+      id: i.id,
+      title: i.title ?? '(sem título)',
+      status: i.status ?? 'open',
+      priority: i.priority ?? 'medium',
+      assigneeAgentId: i.assigneeAgentId ?? null,
+      description: i.description ?? null,
+      createdAt: i.createdAt ?? '',
+      updatedAt: i.updatedAt ?? '',
+    }))
   }
 
-  async getChatSession(
-    companyId: string,
-    agentRef: string
-  ): Promise<ChatResponse> {
-    return this.request<ChatResponse>(
-      `/companies/${companyId}/chats/${agentRef}`
-    )
+  async getApprovals(_companyId: string): Promise<Approval[]> {
+    return []
   }
 
-  async createChat(
-    companyId: string,
-    data: CreateChatRequest
-  ): Promise<CreateChatResponse> {
-    return this.request<CreateChatResponse>(
-      `/companies/${companyId}/chats/${data.agentRef}`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ subject: data.subject }),
-      }
-    )
-  }
-
-  async sendMessage(
-    issueId: string,
-    data: SendMessageRequest
-  ): Promise<SendMessageResponse> {
-    return this.request<SendMessageResponse>(`/issues/${issueId}/comments`, {
+  // Chat: cria uma issue de chat com o agente (conversa no Paperclip)
+  async createChat(companyId: string, data: { agentRef: string; subject?: string }): Promise<any> {
+    const result = await this.request<any>(`/companies/${companyId}/issues`, {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        title: data.subject || 'Nova conversa',
+        description: '',
+        status: 'todo',
+        assigneeAgentId: data.agentRef, // agentRef aqui é na verdade o agentId
+        priority: 'medium',
+      }),
     })
+    return {
+      session: {
+        id: result.id,
+        agentId: data.agentRef,
+        agentRef: data.agentRef,
+        subject: result.title ?? data.subject ?? 'Nova conversa',
+        createdAt: result.createdAt ?? '',
+        updatedAt: result.updatedAt ?? '',
+        messageCount: 0,
+      },
+    }
   }
 
-  async getIssues(companyId: string): Promise<Issue[]> {
-    const response = await this.request<ListIssuesResponse>(
-      `/companies/${companyId}/issues`
+  // Chat: obtém sessão de chat (issue) existente
+  async getChatSession(companyId: string, agentRef: string): Promise<any> {
+    // Busca issues recentes atribuídas ao agente
+    const issues = await this.request<any>(
+      `/companies/${companyId}/issues?assigneeAgentId=${agentRef}&limit=10`
     )
-    return response.issues
+    const list = Array.isArray(issues) ? issues : issues.issues ?? issues.items ?? []
+    const latest = list[0]
+    if (!latest) {
+      throw new Error('404: Nenhuma conversa encontrada')
+    }
+    // Busca comentários da issue
+    const comments = await this.request<any>(`/issues/${latest.id}/comments`).catch(() => [])
+    const msgs = Array.isArray(comments) ? comments : comments.comments ?? comments.items ?? []
+    return {
+      session: {
+        id: latest.id,
+        agentId: agentRef,
+        agentRef,
+        subject: latest.title ?? 'Conversa',
+        createdAt: latest.createdAt ?? '',
+        updatedAt: latest.updatedAt ?? '',
+        messageCount: msgs.length,
+      },
+      messages: msgs.map((c: any) => ({
+        id: c.id,
+        sessionId: latest.id,
+        role: c.authorAgentId ? 'assistant' : 'user',
+        content: c.body ?? '',
+        timestamp: c.createdAt ?? '',
+      })),
+    }
   }
 
-  async getApprovals(companyId: string): Promise<Approval[]> {
-    const response = await this.request<ListApprovalsResponse>(
-      `/companies/${companyId}/approvals`
+  // Chat: histórico de issues/conversas do agente
+  async getChats(companyId: string, agentRef: string): Promise<any[]> {
+    const data = await this.request<any>(
+      `/companies/${companyId}/issues?assigneeAgentId=${agentRef}&limit=20`
     )
-    return response.approvals
+    const list = Array.isArray(data) ? data : data.issues ?? data.items ?? []
+    return list.map((i: any) => ({
+      id: i.id,
+      agentId: agentRef,
+      agentRef,
+      subject: i.title ?? 'Conversa',
+      createdAt: i.createdAt ?? '',
+      updatedAt: i.updatedAt ?? '',
+      messageCount: 0,
+    }))
   }
 
-  async createApproval(
-    companyId: string,
-    data: CreateApprovalRequest
-  ): Promise<Approval> {
-    return this.request<Approval>(`/companies/${companyId}/approvals`, {
+  async sendMessage(issueId: string, data: SendMessageRequest): Promise<SendMessageResponse> {
+    const comment = await this.request<any>(`/issues/${issueId}/comments`, {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify({ body: data.content }),
     })
+    return {
+      message: {
+        id: comment.id ?? `msg-${Date.now()}`,
+        sessionId: issueId,
+        role: 'user',
+        content: data.content,
+        timestamp: comment.createdAt ?? new Date().toISOString(),
+        clientRequestId: data.clientRequestId,
+      },
+      session: {
+        id: issueId,
+        agentId: '',
+        agentRef: '',
+        subject: '',
+        createdAt: '',
+        updatedAt: new Date().toISOString(),
+        messageCount: 0,
+      },
+    }
   }
 
-  async updateApproval(
-    approvalId: string,
-    data: UpdateApprovalRequest
-  ): Promise<Approval> {
-    return this.request<Approval>(`/approvals/${approvalId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    })
+  async createApproval(_companyId: string, _data: CreateApprovalRequest): Promise<Approval> {
+    throw new Error('Não implementado')
+  }
+
+  async updateApproval(_approvalId: string, _data: UpdateApprovalRequest): Promise<Approval> {
+    throw new Error('Não implementado')
   }
 }
 

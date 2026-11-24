@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '../lib/api'
 import type { SessionData, Agent } from '../types/api'
 
+const COMPANY_ID = 'c65f4f1a-7314-4d4d-8194-bccea4a950c9'
+
 export function useSession() {
   const [session, setSession] = useState<SessionData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -10,8 +12,22 @@ export function useSession() {
   const fetchSession = useCallback(async () => {
     try {
       setLoading(true)
-      const data = await api.getSession()
-      setSession(data)
+      const raw = await api.getSession()
+      // Paperclip retorna { session, user } — adaptamos para o formato interno
+      const adapted: SessionData = {
+        ...(raw as any),
+        user: {
+          id: (raw as any).user?.id ?? '',
+          name: (raw as any).user?.name ?? 'Usuário',
+          email: (raw as any).user?.email ?? '',
+          avatar: (raw as any).user?.image ?? null,
+        },
+        company: {
+          id: COMPANY_ID,
+          name: 'Master JF Soluções Digitais',
+        },
+      }
+      setSession(adapted)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Erro ao carregar sessão'))
