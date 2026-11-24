@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { MessageSquare, FileText, CheckCircle, Bell, Settings, Menu } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { ChatView } from './components/ChatView'
@@ -28,6 +28,7 @@ function AppContent() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [notifications, setNotifications] = useState<{ id: string; message: string; read: boolean }[]>([])
+  const mobileSidebarRef = useRef<HTMLDivElement>(null)
 
   const activeAgent = agents.find((a) => a.ref === activeAgentRef) || agents[0] || null
 
@@ -43,6 +44,34 @@ function AppContent() {
       ...prev.slice(0, 9),
     ])
   }, [activeAgent])
+
+  // Focus trap para o mobile sidebar
+  useEffect(() => {
+    if (!mobileSidebarOpen) return
+    const container = mobileSidebarRef.current
+    if (!container) return
+    const focusableSelectors = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    const focusableEls = Array.from(container.querySelectorAll<HTMLElement>(focusableSelectors))
+    const firstEl = focusableEls[0]
+    const lastEl = focusableEls[focusableEls.length - 1]
+    firstEl?.focus()
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMobileSidebarOpen(false)
+        return
+      }
+      if (e.key !== 'Tab') return
+      if (focusableEls.length === 0) { e.preventDefault(); return }
+      if (e.shiftKey) {
+        if (document.activeElement === firstEl) { e.preventDefault(); lastEl?.focus() }
+      } else {
+        if (document.activeElement === lastEl) { e.preventDefault(); firstEl?.focus() }
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [mobileSidebarOpen])
 
   if (sessionLoading || agentsLoading) {
     return (
@@ -101,6 +130,11 @@ function AppContent() {
 
   return (
     <div className="app min-h-screen bg-[var(--color-bg-base)]">
+      {/* Skip-link para navegação por teclado */}
+      <a href="#main-content" className="skip-link">
+        Pular para o conteúdo principal
+      </a>
+
       <header className={cn(
         'app-header fixed top-0 right-0 h-[56px] bg-[var(--color-bg-surface)] border-b border-[var(--color-border-subtle)] flex items-center justify-between px-4 z-[var(--z-sticky)] transition-all duration-base',
         sidebarCollapsed ? 'left-[72px]' : 'left-[280px]'
@@ -122,7 +156,12 @@ function AppContent() {
             <button className="btn btn-ghost btn-icon relative" aria-label="Notificações">
               <Bell size={24} />
               {notifications.some((n) => !n.read) && (
-                <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-[var(--color-status-error)] text-[var(--color-text-on-brand)] text-[10px] font-bold flex items-center justify-center">
+                <span
+                  className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-[var(--color-status-error)] text-[var(--color-text-on-brand)] text-[10px] font-bold flex items-center justify-center"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  aria-label={`${notifications.filter((n) => !n.read).length} notificações não lidas`}
+                >
                   {notifications.filter((n) => !n.read).length}
                 </span>
               )}
@@ -134,7 +173,7 @@ function AppContent() {
               style={{ backgroundColor: '#7C4DFF' }}
             >
               {session.user.avatar ? (
-                <img src={session.user.avatar} alt="" />
+                <img src={session.user.avatar} alt={session.user.name} />
               ) : (
                 getInitials(session.user.name)
               )}
@@ -159,11 +198,17 @@ function AppContent() {
 
       {mobileSidebarOpen && (
         <div
+          ref={mobileSidebarRef}
           className="fixed inset-0 z-[var(--z-drawer)] lg:hidden"
-          onClick={() => setMobileSidebarOpen(false)}
-          aria-hidden="true"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Menu de agentes"
         >
-          <div className="absolute inset-0 bg-black/40" />
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setMobileSidebarOpen(false)}
+            aria-hidden="true"
+          />
           <Sidebar
             agents={agents}
             activeAgentRef={activeAgentRef}
@@ -176,10 +221,14 @@ function AppContent() {
         </div>
       )}
 
-      <main className={cn(
-        'app-main flex-1 pt-[56px] transition-all duration-base',
-        sidebarCollapsed ? 'ml-[72px]' : 'ml-[280px]'
-      )}>
+      <main
+        id="main-content"
+        className={cn(
+          'app-main flex-1 pt-[56px] transition-all duration-base',
+          sidebarCollapsed ? 'ml-[72px]' : 'ml-[280px]'
+        )}
+        tabIndex={-1}
+      >
         <div className="h-full">
           {activeView === 'chat' && activeAgent && (
             <ChatView
@@ -232,7 +281,7 @@ function AppContent() {
               activeView === view.id && 'text-[var(--color-brand-primary)]'
             )}
             onClick={() => setActiveView(view.id)}
-            aria-current={activeView === view.id ? 'page' : 'false'}
+            aria-current={activeView === view.id ? 'page' : undefined}
             aria-label={view.label}
           >
             <view.icon size={24} />

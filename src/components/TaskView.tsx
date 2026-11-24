@@ -70,7 +70,7 @@ export function TaskView({ companyId, agents, currentAgentId, showOnlyAssigned =
             <h2 className="text-h3 font-semibold text-[var(--color-text-primary)]">Tarefas</h2>
             <span className="badge badge-brand">{filteredIssues.length}</span>
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap" role="search" aria-label="Filtrar e buscar tarefas">
             <div className="relative">
               <Filter size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" aria-hidden="true" />
               <select
@@ -217,7 +217,11 @@ export function TaskView({ companyId, agents, currentAgentId, showOnlyAssigned =
                               ? 'badge-warning'
                               : 'badge-info'
                           )}>
-                            {issue.priority}
+                            {issue.priority === 'critical' ? 'Crítico'
+                              : issue.priority === 'high' ? 'Alto'
+                              : issue.priority === 'medium' ? 'Médio'
+                              : issue.priority === 'low' ? 'Baixo'
+                              : issue.priority}
                           </span>
                         )}
                       </div>

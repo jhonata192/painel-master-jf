@@ -30,8 +30,7 @@ export function Sidebar({
         width: collapsed ? '72px' : '280px',
         flexShrink: 0,
       }}
-      role="navigation"
-      aria-label="Agentes"
+      aria-label="Painel de agentes"
     >
       <div className="sidebar__header p-4 border-b border-[var(--color-border-subtle)] flex items-center justify-between">
         {!collapsed && (
@@ -61,7 +60,7 @@ export function Sidebar({
                   activeAgentRef === agent.ref && 'active'
                 )}
                 onClick={() => onSelectAgent(agent.ref)}
-                aria-current={activeAgentRef === agent.ref ? 'true' : 'false'}
+                aria-current={activeAgentRef === agent.ref ? 'true' : undefined}
                 aria-label={collapsed ? agent.name : undefined}
                 title={collapsed ? agent.name : undefined}
               >
@@ -94,7 +93,11 @@ export function Sidebar({
 
       {!collapsed && (
         <div className="p-3 border-t border-[var(--color-border-subtle)]">
-          <div className="text-center text-[var(--text-caption)] text-[var(--color-text-tertiary)]">
+          <div
+            className="text-center text-[var(--text-caption)] text-[var(--color-text-tertiary)]"
+            role="status"
+            aria-live="polite"
+          >
             {agents.length} agentes disponíveis
           </div>
         </div>

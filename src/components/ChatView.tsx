@@ -125,8 +125,8 @@ export function ChatView({ agent, companyId, onNewMessage }: ChatViewProps) {
             </div>
           </div>
         </div>
-        <div className="flex-1 flex items-center justify-center">
-          <div className="skeleton h-8 w-48 rounded-md" data-testid="chat-loading-skeleton" />
+        <div className="flex-1 flex items-center justify-center" aria-busy="true" aria-label="Carregando conversa">
+          <div className="skeleton h-8 w-48 rounded-md" data-testid="chat-loading-skeleton" aria-hidden="true" />
           <div className="skeleton h-4 w-64 rounded-md mt-2" />
           <div className="skeleton h-4 w-48 rounded-md mt-2" />
         </div>
@@ -368,7 +368,11 @@ export function ChatView({ agent, companyId, onNewMessage }: ChatViewProps) {
         <div ref={messagesEndRef} />
       </div>
 
-      <form className="chat-view__input p-4 border-t border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]" onSubmit={handleSendMessage}>
+      <form
+        className="chat-view__input p-4 border-t border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]"
+        onSubmit={handleSendMessage}
+        aria-label={`Enviar mensagem para ${agent.name}`}
+      >
         <div className="flex items-end gap-3">
           <textarea
             ref={textareaRef}
@@ -385,12 +389,15 @@ export function ChatView({ agent, companyId, onNewMessage }: ChatViewProps) {
             type="submit"
             className="btn btn-primary btn-icon flex-shrink-0"
             disabled={sending || !session}
-            aria-label="Enviar mensagem"
+            aria-label={sending ? 'Enviando mensagem...' : 'Enviar mensagem'}
           >
             {sending ? (
-              <Loader2 size={20} className="animate-spin" />
+              <>
+                <Loader2 size={20} className="animate-spin" aria-hidden="true" />
+                <span className="sr-only">Enviando...</span>
+              </>
             ) : (
-              <Send size={20} />
+              <Send size={20} aria-hidden="true" />
             )}
           </button>
         </div>
@@ -463,7 +470,10 @@ function MessageBubble({ message, agent, isOwn, isSending }: MessageBubbleProps)
           )}
         </div>
         <div className="message-bubble__meta flex items-center gap-2 mt-1">
-          <time className="text-[var(--text-caption)] text-[var(--color-text-tertiary)]">
+          <time
+            className="text-[var(--text-caption)] text-[var(--color-text-tertiary)]"
+            dateTime={message.timestamp}
+          >
             {formatTime(message.timestamp)}
           </time>
           {message.clientRequestId && (

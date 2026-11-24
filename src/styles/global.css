@@ -96,6 +96,52 @@ select {
   border: 0;
 }
 
+/* Skip-link: visível apenas ao receber foco via teclado */
+.skip-link {
+  position: absolute;
+  top: -100%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  padding: var(--space-3) var(--space-6);
+  background: var(--color-brand-primary);
+  color: var(--color-text-on-brand);
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--text-body);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  transition: top 0.1s ease;
+}
+
+.skip-link:focus {
+  top: var(--space-3);
+  outline: 3px solid var(--color-text-on-brand);
+  outline-offset: 2px;
+}
+
+/* Focus-visible global para qualquer elemento interativo */
+:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Remove outline padrão apenas quando focus-visible está ativo */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Respeitar preferência do usuário por menos movimento */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 .container {
   width: 100%;
   max-width: 1280px;

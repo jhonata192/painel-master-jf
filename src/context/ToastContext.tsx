@@ -91,7 +91,8 @@ function ToastContainer({ toasts, onClose }: { toasts: Toast[]; onClose: (id: st
           className={`toast toast--${toast.type}`}
           style={{ pointerEvents: 'auto' }}
           role="alert"
-          aria-live="polite"
+          aria-live={toast.type === 'error' ? 'assertive' : 'polite'}
+          aria-atomic="true"
         >
           <div className="toast__icon" style={{ color: getToastColor(toast.type) }}>
             {icons[toast.type]}
