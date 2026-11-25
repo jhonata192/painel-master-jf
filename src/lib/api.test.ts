@@ -227,4 +227,53 @@ describe('ApiClient — Paperclip full integration', () => {
     expect(commentBody.body).toBe('Comentário')
     expect(commentBody.clientRequestId).toMatch(uuidRe)
   })
+
+  it('orders chat messages chronologically (oldest first, top-to-bottom) even when Paperclip returns comments newest-first', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/chats/sofia')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              id: 'chat-issue-desc',
+              title: 'Chat com Sofia',
+              assigneeAgentId: 'ag-1',
+              createdAt: '2026-11-25T12:00:00Z',
+              updatedAt: '2026-11-25T12:16:00Z',
+            }),
+          })
+        }
+        if (url.includes('/comments')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => [
+              {
+                id: 'c-newer',
+                issueId: 'chat-issue-desc',
+                authorAgentId: 'ag-1',
+                body: 'Resposta da Sofia (09:16)',
+                createdAt: '2026-11-25T12:16:31.465Z',
+              },
+              {
+                id: 'c-older',
+                issueId: 'chat-issue-desc',
+                authorAgentId: null,
+                body: 'Pergunta do usuário (09:12)',
+                createdAt: '2026-11-25T12:12:31.283Z',
+              },
+            ],
+          })
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => [] })
+      })
+    )
+
+    const res = await api.getChatSession(companyId, 'sofia')
+    expect(res.messages.map((m) => m.id)).toEqual(['c-older', 'c-newer'])
+    expect(res.messages[0].role).toBe('user')
+    expect(res.messages[1].role).toBe('assistant')
+  })
 })

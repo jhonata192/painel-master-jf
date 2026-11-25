@@ -649,7 +649,13 @@ class ApiClient {
         isBriefing: true,
       })
     }
-    for (const c of comments) {
+    const orderedComments = [...comments].sort((a, b) => {
+      const ta = a.createdAt ? Date.parse(a.createdAt) : 0
+      const tb = b.createdAt ? Date.parse(b.createdAt) : 0
+      if (Number.isNaN(ta) || Number.isNaN(tb)) return 0
+      return ta - tb
+    })
+    for (const c of orderedComments) {
       messages.push({
         id: c.id,
         sessionId: issue.id,
