@@ -28,6 +28,8 @@ interface TaskViewProps {
   agents: Agent[]
   currentAgentId?: string
   showOnlyAssigned?: boolean
+  initialIssueId?: string | null
+  onClearInitialIssue?: () => void
 }
 
 const statusConfig = {
@@ -351,7 +353,14 @@ function StatusDropdown({ current, onSelect, disabled }: StatusDropdownProps) {
   )
 }
 
-export function TaskView({ companyId, agents, currentAgentId, showOnlyAssigned = false }: TaskViewProps) {
+export function TaskView({
+  companyId,
+  agents,
+  currentAgentId,
+  showOnlyAssigned = false,
+  initialIssueId,
+  onClearInitialIssue,
+}: TaskViewProps) {
   const { issues, loading, error, refetch, updateIssue, createIssue, deleteIssue } = useIssues({
     companyId,
     agentId: showOnlyAssigned ? currentAgentId : undefined,
@@ -361,6 +370,7 @@ export function TaskView({ companyId, agents, currentAgentId, showOnlyAssigned =
   const [projects, setProjects] = useState<Project[]>([])
   const [labels, setLabels] = useState<IssueLabel[]>([])
   const [filterStatus, setFilterStatus] = useState<StatusKey | 'all'>('all')
+  const [onlyActive, setOnlyActive] = useState(false)
   const [filterAgent, setFilterAgent] = useState<string>('all')
   const [filterProject, setFilterProject] = useState<string>('all')
   const [searchQuery, setSearchQuery] = useState('')
@@ -375,7 +385,17 @@ export function TaskView({ companyId, agents, currentAgentId, showOnlyAssigned =
     api.listLabels(companyId).then(setLabels).catch(() => {})
   }, [companyId])
 
+  useEffect(() => {
+    if (!initialIssueId || issues.length === 0) return
+    const match = issues.find((i) => i.id === initialIssueId)
+    if (match) {
+      setDetailIssue(match)
+      onClearInitialIssue?.()
+    }
+  }, [initialIssueId, issues, onClearInitialIssue])
+
   const filteredIssues = issues.filter((issue) => {
+    if (onlyActive && (issue.status === 'done' || issue.status === 'cancelled')) return false
     if (filterStatus !== 'all' && issue.status !== filterStatus) return false
     if (filterAgent !== 'all' && issue.assigneeAgentId !== filterAgent) return false
     if (filterProject !== 'all' && issue.projectId !== filterProject) return false
@@ -567,6 +587,15 @@ export function TaskView({ companyId, agents, currentAgentId, showOnlyAssigned =
             onChange={(e) => setSearchQuery(e.target.value)}
             aria-label="Buscar tarefas"
           />
+
+          <button
+            type="button"
+            className={cn('btn btn-sm', onlyActive ? 'btn-primary' : 'btn-secondary')}
+            onClick={() => setOnlyActive((v) => !v)}
+            aria-pressed={onlyActive}
+          >
+            {onlyActive ? 'Só Ativas ✓' : 'Só Ativas'}
+          </button>
 
           <button
             className="btn btn-ghost btn-icon"
@@ -804,11 +833,13 @@ export function TaskView({ companyId, agents, currentAgentId, showOnlyAssigned =
       {detailIssue && (
         <TaskDetailDrawer
           issue={detailIssue}
+          allIssues={issues}
           companyId={companyId}
           agents={agents}
           projects={projects}
           labels={labels}
           onClose={() => setDetailIssue(null)}
+          onSelectIssue={(target) => setDetailIssue(target)}
           onIssueUpdated={(updated) => {
             setDetailIssue(updated)
             refetch()

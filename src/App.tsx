@@ -105,6 +105,7 @@ function AppContent() {
 
   const [activeView, setActiveView] = useState<ViewId>('dashboard')
   const [activeAgentRef, setActiveAgentRef] = useState<string | null>(null)
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [showNotifications, setShowNotifications] = useState(false)
@@ -226,6 +227,7 @@ function AppContent() {
       }
       setActiveView('agents')
     } else if (hit.type === 'issue') {
+      setSelectedTaskId(hit.id)
       setActiveView('tasks')
     } else if (hit.type === 'project' || hit.type === 'goal') {
       setActiveView('projects')
@@ -501,6 +503,10 @@ function AppContent() {
               companyId={companyId}
               agents={agents}
               onNavigate={(v) => setActiveView(v as ViewId)}
+              onOpenChat={(ref) => {
+                setActiveAgentRef(ref)
+                setActiveView('chat')
+              }}
             />
           )}
 
@@ -508,6 +514,8 @@ function AppContent() {
             <ChatView
               agent={activeAgent}
               companyId={companyId}
+              agents={agents}
+              onSelectAgent={(ref) => setActiveAgentRef(ref)}
               onNewMessage={handleNewMessage}
             />
           )}
@@ -528,6 +536,8 @@ function AppContent() {
               agents={agents}
               currentAgentId={activeAgent?.id}
               showOnlyAssigned={false}
+              initialIssueId={selectedTaskId}
+              onClearInitialIssue={() => setSelectedTaskId(null)}
             />
           )}
 
@@ -572,7 +582,7 @@ function AppContent() {
 
       {/* Navegação inferior Mobile */}
       <nav className="app-nav-mobile" aria-label="Navegação principal mobile">
-        {VIEWS.slice(0, 6).map((view) => (
+        {VIEWS.map((view) => (
           <button
             key={view.id}
             className={cn('mobile-nav-btn', activeView === view.id && 'active')}

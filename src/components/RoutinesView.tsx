@@ -164,6 +164,16 @@ export function RoutinesView({ companyId, agents }: RoutinesViewProps) {
     }
   }
 
+  useEffect(() => {
+    if (!logRun || logRun.status !== 'running') return
+    const timer = setInterval(() => {
+      api.getRunLog(logRun.id).then((res) => {
+        if (res.content) setLogContent(res.content)
+      }).catch(() => {})
+    }, 3000)
+    return () => clearInterval(timer)
+  }, [logRun])
+
   const handleCancelRun = async (runId: string) => {
     try {
       await api.cancelRun(runId)
@@ -457,8 +467,24 @@ export function RoutinesView({ companyId, agents }: RoutinesViewProps) {
               <button className="modal__close" onClick={() => setLogRun(null)} aria-label="Fechar"><XCircle size={20} /></button>
             </div>
             <div className="modal__body stack-sm">
-              <div className="text-caption text-tertiary">
-                Status: <strong>{logRun.status}</strong> • Tokens: {logRun.totalTokens ?? 0} • Custo: US$ {(logRun.costUsd ?? 0).toFixed(4)}
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="text-caption text-tertiary">
+                  Status: <strong>{logRun.status}</strong> • Tokens: {logRun.totalTokens ?? 0} • Custo: US$ {(logRun.costUsd ?? 0).toFixed(4)}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button className="btn btn-secondary btn-sm" onClick={() => openRunLog(logRun)}>
+                    <RotateCcw size={13} /> Atualizar
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(logContent)
+                      success('Log copiado')
+                    }}
+                  >
+                    Copiar
+                  </button>
+                </div>
               </div>
               <pre className="log-console">
                 {loadingLog ? 'Carregando log...' : logContent}

@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   DollarSign,
   Inbox,
+  MessageSquare,
   Play,
   RotateCcw,
   Square,
@@ -20,9 +21,10 @@ interface DashboardViewProps {
   companyId: string
   agents: Agent[]
   onNavigate?: (view: string) => void
+  onOpenChat?: (agentRef: string) => void
 }
 
-export function DashboardView({ companyId, agents, onNavigate }: DashboardViewProps) {
+export function DashboardView({ companyId, agents, onNavigate, onOpenChat }: DashboardViewProps) {
   const { success, error: showError } = useToastHelpers()
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [attention, setAttention] = useState<AttentionFeed | null>(null)
@@ -163,6 +165,35 @@ export function DashboardView({ companyId, agents, onNavigate }: DashboardViewPr
                 </div>
               </div>
             </div>
+
+            {/* Acesso Rápido & Equipe */}
+            {onOpenChat && agents.length > 0 && (
+              <section className="card stack-sm" aria-labelledby="quick-team-title">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <h3 id="quick-team-title" className="text-body" style={{ fontWeight: 600 }}>
+                    Acesso Rápido — Iniciar Conversa
+                  </h3>
+                  {onNavigate && (
+                    <button className="btn btn-ghost btn-sm" onClick={() => onNavigate('tasks')}>
+                      Abrir Tarefas
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {agents.slice(0, 8).map((ag) => (
+                    <button
+                      key={ag.id}
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => onOpenChat(ag.ref)}
+                    >
+                      <MessageSquare size={13} aria-hidden="true" />
+                      {ag.name.split(' - ')[0]}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {/* Gráfico de atividade dos últimos 14 dias */}
             <section className="card stack-md" aria-labelledby="chart-activity-title">

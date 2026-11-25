@@ -34,24 +34,28 @@ import type {
 
 interface TaskDetailDrawerProps {
   issue: Issue
+  allIssues?: Issue[]
   companyId: string
   agents: Agent[]
   projects: Project[]
   labels: IssueLabel[]
   onClose: () => void
   onIssueUpdated: (updated: Issue) => void
+  onSelectIssue?: (target: Issue) => void
 }
 
 type DetailTab = 'overview' | 'comments' | 'documents' | 'attachments' | 'runs'
 
 export function TaskDetailDrawer({
   issue,
+  allIssues = [],
   companyId,
   agents,
   projects,
   labels,
   onClose,
   onIssueUpdated,
+  onSelectIssue,
 }: TaskDetailDrawerProps) {
   const { success, error: showError } = useToastHelpers()
   const [tab, setTab] = useState<DetailTab>('overview')
@@ -269,7 +273,10 @@ export function TaskDetailDrawer({
   }
 
   const assignee = agents.find((a) => a.id === issue.assigneeAgentId)
+  const creator = issue.createdByAgentId ? agents.find((a) => a.id === issue.createdByAgentId) : null
   const project = projects.find((p) => p.id === issue.projectId)
+  const parentIssue = issue.parentId ? allIssues.find((i) => i.id === issue.parentId) : null
+  const childIssues = allIssues.filter((i) => i.parentId === issue.id)
   const activeLabelIds = issue.labelIds ?? (issue.labels ?? []).map((l) => l.id)
 
   return (
@@ -356,12 +363,52 @@ export function TaskDetailDrawer({
                   </div>
                 </div>
                 <div className="card">
-                  <div className="text-caption text-tertiary">Projeto</div>
+                  <div className="text-caption text-tertiary">Origem / Projeto</div>
                   <div className="text-body-sm mt-1">
-                    {project ? project.name : 'Nenhum projeto'}
+                    {creator ? `Delegada por ${creator.name}` : (project ? project.name : 'Board / Manual')}
                   </div>
                 </div>
               </div>
+
+              {(parentIssue || childIssues.length > 0) && (
+                <div className="card stack-sm">
+                  <h3 className="text-body-sm text-secondary" style={{ fontWeight: 600 }}>
+                    Relacionamentos (Delegação)
+                  </h3>
+                  {parentIssue && (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-caption text-tertiary">Tarefa Pai:</span>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => onSelectIssue?.(parentIssue)}
+                      >
+                        {parentIssue.identifier ? `${parentIssue.identifier} — ` : ''}{parentIssue.title}
+                      </button>
+                    </div>
+                  )}
+                  {childIssues.length > 0 && (
+                    <div className="stack-xs">
+                      <span className="text-caption text-tertiary">Subtarefas ({childIssues.length}):</span>
+                      {childIssues.map((sub) => {
+                        const subAg = agents.find((a) => a.id === sub.assigneeAgentId)
+                        return (
+                          <button
+                            key={sub.id}
+                            type="button"
+                            className="dropdown-item"
+                            onClick={() => onSelectIssue?.(sub)}
+                          >
+                            <span className="badge badge-neutral">{sub.status}</span>
+                            <span className="text-truncate flex-1">{sub.title}</span>
+                            {subAg && <span className="text-caption text-tertiary">{subAg.name.split(' ')[0]}</span>}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div>
                 <h3 className="text-body-sm text-secondary mb-2">Ações de Execução (Paperclip)</h3>

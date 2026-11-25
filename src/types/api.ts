@@ -46,6 +46,10 @@ export interface ChatSession {
   updatedAt: string
   messageCount: number
   lastMessage?: Message
+  identifier?: string
+  status?: string
+  createdByAgentId?: string | null
+  parentId?: string | null
 }
 
 export interface Message {
@@ -54,6 +58,8 @@ export interface Message {
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: string
+  authorAgentId?: string | null
+  isBriefing?: boolean
   clientRequestId?: string
   metadata?: Record<string, unknown>
 }
@@ -89,6 +95,7 @@ export interface Issue {
   assigneeAgentName?: string
   assigneeAgentRef?: string
   assigneeUserId?: string | null
+  createdByAgentId?: string | null
   projectId?: string | null
   goalId?: string | null
   parentId?: string | null

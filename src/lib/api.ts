@@ -94,6 +94,7 @@ function mapIssue(i: any): Issue {
     priority: i.priority ?? 'medium',
     assigneeAgentId: i.assigneeAgentId ?? null,
     assigneeUserId: i.assigneeUserId ?? null,
+    createdByAgentId: i.createdByAgentId ?? null,
     projectId: i.projectId ?? null,
     goalId: i.goalId ?? null,
     parentId: i.parentId ?? null,
@@ -609,6 +610,51 @@ class ApiClient {
     }
   }
 
+  private buildChatSessionResponse(
+    issue: Issue,
+    agentRef: string,
+    comments: IssueComment[]
+  ): { session: ChatSession; messages: Message[] } {
+    const messages: Message[] = []
+    if (issue.description && issue.description.trim()) {
+      messages.push({
+        id: `briefing-${issue.id}`,
+        sessionId: issue.id,
+        role: issue.createdByAgentId ? 'assistant' : 'user',
+        content: issue.description.trim(),
+        timestamp: issue.createdAt ?? '',
+        authorAgentId: issue.createdByAgentId ?? null,
+        isBriefing: true,
+      })
+    }
+    for (const c of comments) {
+      messages.push({
+        id: c.id,
+        sessionId: issue.id,
+        role: c.authorAgentId ? 'assistant' : 'user',
+        content: c.body ?? '',
+        timestamp: c.createdAt ?? '',
+        authorAgentId: c.authorAgentId ?? null,
+      })
+    }
+    return {
+      session: {
+        id: issue.id,
+        agentId: issue.assigneeAgentId ?? agentRef,
+        agentRef,
+        subject: issue.title ?? 'Conversa',
+        createdAt: issue.createdAt ?? '',
+        updatedAt: issue.updatedAt ?? '',
+        messageCount: messages.length,
+        identifier: issue.identifier,
+        status: issue.status,
+        createdByAgentId: issue.createdByAgentId ?? null,
+        parentId: issue.parentId ?? null,
+      },
+      messages,
+    }
+  }
+
   async getChatSession(companyId: string, agentRef: string): Promise<{ session: ChatSession; messages: Message[] }> {
     let targetIssue = await this.getAgentChat(companyId, agentRef).catch(() => null)
     if (!targetIssue) {
@@ -621,54 +667,20 @@ class ApiClient {
       throw new Error('404: Nenhuma conversa encontrada')
     }
     const comments = await this.listIssueComments(targetIssue.id).catch(() => [])
-    return {
-      session: {
-        id: targetIssue.id,
-        agentId: targetIssue.assigneeAgentId ?? agentRef,
-        agentRef,
-        subject: targetIssue.title ?? 'Conversa',
-        createdAt: targetIssue.createdAt ?? '',
-        updatedAt: targetIssue.updatedAt ?? '',
-        messageCount: comments.length,
-      },
-      messages: comments.map((c) => ({
-        id: c.id,
-        sessionId: targetIssue!.id,
-        role: c.authorAgentId ? 'assistant' : 'user',
-        content: c.body ?? '',
-        timestamp: c.createdAt ?? '',
-      })),
-    }
+    return this.buildChatSessionResponse(targetIssue, agentRef, comments)
   }
 
   async getSessionByIssueId(issueId: string, agentRef: string): Promise<{ session: ChatSession; messages: Message[] }> {
     const issue = await this.getIssue(issueId)
     const comments = await this.listIssueComments(issueId).catch(() => [])
-    return {
-      session: {
-        id: issue.id,
-        agentId: issue.assigneeAgentId ?? agentRef,
-        agentRef,
-        subject: issue.title ?? 'Conversa',
-        createdAt: issue.createdAt ?? '',
-        updatedAt: issue.updatedAt ?? '',
-        messageCount: comments.length,
-      },
-      messages: comments.map((c) => ({
-        id: c.id,
-        sessionId: issue.id,
-        role: c.authorAgentId ? 'assistant' : 'user',
-        content: c.body ?? '',
-        timestamp: c.createdAt ?? '',
-      })),
-    }
+    return this.buildChatSessionResponse(issue, agentRef, comments)
   }
 
   async getChats(companyId: string, agentRef: string): Promise<ChatSession[]> {
     const agentId = await this.resolveAgentId(companyId, agentRef)
     const [nativeChats, issuesRaw] = await Promise.all([
       this.listCompanyChats(companyId).catch(() => []),
-      this.request<any>(`/companies/${companyId}/issues?assigneeAgentId=${encodeURIComponent(agentId)}&limit=20`).catch(() => []),
+      this.request<any>(`/companies/${companyId}/issues?assigneeAgentId=${encodeURIComponent(agentId)}&limit=30`).catch(() => []),
     ])
     const issueList = Array.isArray(issuesRaw) ? issuesRaw : issuesRaw.issues ?? issuesRaw.items ?? []
     const combined = new Map<string, Issue>()
@@ -688,6 +700,10 @@ class ApiClient {
       createdAt: i.createdAt ?? '',
       updatedAt: i.updatedAt ?? '',
       messageCount: 0,
+      identifier: i.identifier,
+      status: i.status,
+      createdByAgentId: i.createdByAgentId ?? null,
+      parentId: i.parentId ?? null,
     }))
   }
 

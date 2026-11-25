@@ -154,4 +154,57 @@ describe('ApiClient — Paperclip full integration', () => {
       message: 'Failed query: delete from "issues"',
     })
   })
+
+  it('includes issue description briefing and authorAgentId in getChatSession for delegated tasks', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/chats/')) {
+          return Promise.resolve({ ok: true, status: 200, json: async () => null })
+        }
+        if (url.includes('/issues?assigneeAgentId=')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => [
+              {
+                id: 'task-del-1',
+                identifier: 'MAS-2',
+                title: 'Implementar tela X',
+                description: 'Larissa, crie a tela X conforme combinado.',
+                status: 'in_progress',
+                assigneeAgentId: '11111111-1111-1111-1111-111111111111',
+                createdByAgentId: '22222222-2222-2222-2222-222222222222',
+                createdAt: '2026-11-25T10:00:00Z',
+                updatedAt: '2026-11-25T10:01:00Z',
+              },
+            ],
+          })
+        }
+        if (url.includes('/comments')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => [
+              {
+                id: 'c-1',
+                issueId: 'task-del-1',
+                authorAgentId: '11111111-1111-1111-1111-111111111111',
+                body: 'Iniciando implementação agora.',
+                createdAt: '2026-11-25T10:02:00Z',
+              },
+            ],
+          })
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => [] })
+      })
+    )
+
+    const res = await api.getChatSession(companyId, '11111111-1111-1111-1111-111111111111')
+    expect(res.session.createdByAgentId).toBe('22222222-2222-2222-2222-222222222222')
+    expect(res.messages).toHaveLength(2)
+    expect(res.messages[0].isBriefing).toBe(true)
+    expect(res.messages[0].authorAgentId).toBe('22222222-2222-2222-2222-222222222222')
+    expect(res.messages[1].content).toBe('Iniciando implementação agora.')
+  })
 })
