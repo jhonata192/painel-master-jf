@@ -248,5 +248,38 @@ describe('utils', () => {
       expect(entries[2].detail).toContain('10.608 tokens')
       expect(formatRunLogText(entries)).toContain('Comando: git status')
     })
+
+    it('reassembles split stdout chunks, strips ANSI codes, and ignores trailing partial NDJSON', () => {
+      const fullInner = JSON.stringify({
+        type: 'tool_use',
+        part: {
+          tool: 'bash',
+          state: {
+            status: 'completed',
+            input: { command: 'cd acessilia-ufg && git diff main' },
+            output: 'diff --git a/src/app.js b/src/app.js',
+          },
+        },
+      }) + '\n'
+      const half1 = fullInner.slice(0, 60)
+      const half2 = fullInner.slice(60)
+
+      const raw = [
+        JSON.stringify({
+          ts: '2026-11-25T12:17:49.000Z',
+          stream: 'stderr',
+          chunk: '[91m[1mError: [0mSession not found\n',
+        }),
+        JSON.stringify({ ts: '2026-11-25T12:18:37.000Z', stream: 'stdout', chunk: half1 }),
+        JSON.stringify({ ts: '2026-11-25T12:18:37.100Z', stream: 'stdout', chunk: half2 }),
+        '{"ts":"2026-11-25T15:19:11.042Z","stream":"stdout","chunk":"{\"type\":\"tool_use\",\"part\":{\"tool\":\"bash\",\"state\":{\"input\":{\"command\":\"cd acessilia-ufg && npm test\"',
+      ].join('\n')
+
+      const entries = parseRunLog(raw)
+      expect(entries[0].title).toBe('Error: Session not found')
+      expect(entries[1].title).toBe('Comando: git diff main')
+      expect(entries[1].detail).toContain('diff --git')
+      expect(entries[2].title).toBe('Comando: npm test')
+    })
   })
 })

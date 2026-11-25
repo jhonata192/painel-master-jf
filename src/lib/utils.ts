@@ -110,6 +110,12 @@ export interface FormattedRunLogEntry {
   status?: string
 }
 
+function stripAnsi(text: string): string {
+  return text
+    .replace(/\u001b\[[0-9;]*m/g, '')
+    .replace(/\[(?:0|1|4|3\d|9\d)(?:;\d+)*m/g, '')
+}
+
 function shortenPaperclipPaths(text: string): string {
   return text.replace(
     /\/paperclip\/instances\/[^/\s]+\/projects\/[0-9a-f-]+\/[0-9a-f-]+\//gi,
@@ -117,8 +123,12 @@ function shortenPaperclipPaths(text: string): string {
   )
 }
 
+function cleanLogString(text: string): string {
+  return shortenPaperclipPaths(stripAnsi(text))
+}
+
 function truncateLogText(text: string, max = 500): string {
-  const clean = text.trim()
+  const clean = cleanLogString(text).trim()
   if (clean.length <= max) return clean
   return `${clean.slice(0, max).trimEnd()}\n... (saída resumida, veja JSON bruto para detalhes)`
 }
@@ -132,34 +142,103 @@ function formatLogTime(ts?: string | number): string {
 
 export function parseRunLog(raw: string): FormattedRunLogEntry[] {
   if (!raw || !raw.trim()) return []
-  const lines = raw.split('\n').filter((line) => line.trim().length > 0)
-  const entries: FormattedRunLogEntry[] = []
+  const rawLines = raw.split('\n').filter((line) => line.trim().length > 0)
+  const assembled: Array<{ ts: string; stream: string; text: string }> = []
+  const streamBuffers: Record<string, string> = {}
+  const streamTimestamps: Record<string, string> = {}
 
-  lines.forEach((line, idx) => {
-    let ts = ''
-    let stream = 'stdout'
-    let chunkText = line
-
+  for (const rawLine of rawLines) {
+    let parsedOuter = false
     try {
-      const outer = JSON.parse(line) as Record<string, unknown>
-      if (outer && typeof outer === 'object' && ('chunk' in outer || 'ts' in outer || 'type' in outer)) {
-        if (typeof outer.ts === 'string' || typeof outer.ts === 'number') {
-          ts = formatLogTime(outer.ts)
+      const outer = JSON.parse(rawLine) as Record<string, unknown>
+      if (outer && typeof outer === 'object' && typeof outer.chunk === 'string') {
+        parsedOuter = true
+        const stream = typeof outer.stream === 'string' ? outer.stream : 'stdout'
+        const ts =
+          typeof outer.ts === 'string' || typeof outer.ts === 'number'
+            ? formatLogTime(outer.ts)
+            : streamTimestamps[stream] || ''
+        const prevBuf = streamBuffers[stream] ?? ''
+        if (prevBuf.trim().startsWith('{')) {
+          try {
+            JSON.parse(prevBuf.trim())
+            assembled.push({ ts: streamTimestamps[stream] || ts, stream, text: prevBuf.trim() })
+            streamBuffers[stream] = ''
+          } catch {
+            // Keep incomplete buffer so the next chunk completes it
+          }
         }
-        if (typeof outer.stream === 'string') {
-          stream = outer.stream
+        if (ts) streamTimestamps[stream] = ts
+
+        const combined = (streamBuffers[stream] ?? '') + outer.chunk
+        const parts = combined.split('\n')
+        const tail = parts.pop() ?? ''
+        for (const p of parts) {
+          if (p.trim()) {
+            assembled.push({ ts: streamTimestamps[stream] || ts, stream, text: p })
+          }
         }
-        if (typeof outer.chunk === 'string') {
-          chunkText = outer.chunk
-        } else if (typeof outer.type === 'string') {
-          chunkText = line
+        if (tail.trim().startsWith('{')) {
+          try {
+            JSON.parse(tail.trim())
+            assembled.push({ ts: streamTimestamps[stream] || ts, stream, text: tail.trim() })
+            streamBuffers[stream] = ''
+          } catch {
+            streamBuffers[stream] = tail
+          }
+        } else {
+          streamBuffers[stream] = tail
         }
+      } else if (outer && typeof outer === 'object' && typeof outer.type === 'string') {
+        parsedOuter = true
+        assembled.push({
+          ts:
+            typeof outer.ts === 'string' || typeof outer.ts === 'number'
+              ? formatLogTime(outer.ts)
+              : '',
+          stream: typeof outer.stream === 'string' ? outer.stream : 'stdout',
+          text: rawLine,
+        })
       }
     } catch {
-      // Plain text line
+      // Fall through to partial / plain handling
     }
 
-    const trimmedChunk = chunkText.trim()
+    if (!parsedOuter) {
+      const trimmed = rawLine.trim()
+      if (trimmed.startsWith('{"ts":') || trimmed.startsWith('{"type":')) {
+        // Truncated JSON record at chunk boundary
+        const cmdMatch = trimmed.match(/"command":"([^"\\]*(?:\\.[^"\\]*)*)"/)
+        if (cmdMatch) {
+          const cmd = cleanLogString(cmdMatch[1].replace(/\\"/g, '"')).replace(/^cd\s+[^\s&]+\s*&&\s*/i, '')
+          assembled.push({
+            ts: '',
+            stream: 'stdout',
+            text: JSON.stringify({
+              type: 'tool_use',
+              part: {
+                tool: 'bash',
+                state: { status: 'running', input: { command: cmd } },
+              },
+            }),
+          })
+        }
+      } else {
+        assembled.push({ ts: '', stream: 'stdout', text: rawLine })
+      }
+    }
+  }
+
+  for (const [stream, rem] of Object.entries(streamBuffers)) {
+    if (rem.trim()) {
+      assembled.push({ ts: streamTimestamps[stream] || '', stream, text: rem })
+    }
+  }
+
+  const entries: FormattedRunLogEntry[] = []
+
+  assembled.forEach(({ ts, stream, text }, idx) => {
+    const trimmedChunk = cleanLogString(text).trim()
     if (!trimmedChunk) return
 
     // Skill injection / Paperclip setup lines
@@ -178,15 +257,15 @@ export function parseRunLog(raw: string): FormattedRunLogEntry[] {
       entries.push({
         id: `log-${idx}`,
         time: ts,
-        kind: stream === 'stderr' ? 'info' : 'info',
-        title: shortenPaperclipPaths(trimmedChunk.replace(/^\[paperclip\]\s*/i, '')),
+        kind: 'info',
+        title: cleanLogString(trimmedChunk.replace(/^\[paperclip\]\s*/i, '')),
       })
       return
     }
 
     // Inner JSON event (OpenCode / Claude / Paperclip stream)
     try {
-      const inner = JSON.parse(trimmedChunk) as Record<string, any>
+      const inner = JSON.parse(text.trim()) as Record<string, any>
       const eventTime = ts || formatLogTime(inner.timestamp)
       const part = inner.part ?? {}
 
@@ -227,7 +306,7 @@ export function parseRunLog(raw: string): FormattedRunLogEntry[] {
 
         if (toolName === 'bash') {
           const rawCmd = String(input.command || part.title || state.title || '')
-          const cleanedCmd = shortenPaperclipPaths(rawCmd).replace(/^cd\s+[^\s&]+\s*&&\s*/i, '')
+          const cleanedCmd = cleanLogString(rawCmd).replace(/^cd\s+[^\s&]+\s*&&\s*/i, '')
           const detailRaw = status === 'error' ? state.error : state.output
           entries.push({
             id: `log-${idx}`,
@@ -235,13 +314,13 @@ export function parseRunLog(raw: string): FormattedRunLogEntry[] {
             kind: status === 'error' ? 'error' : 'tool',
             status,
             title: `Comando: ${truncateLogText(cleanedCmd || 'bash', 160)}`,
-            detail: typeof detailRaw === 'string' && detailRaw.trim() ? truncateLogText(shortenPaperclipPaths(detailRaw)) : undefined,
+            detail: typeof detailRaw === 'string' && detailRaw.trim() ? truncateLogText(detailRaw) : undefined,
           })
           return
         }
 
         if (toolName === 'read' || toolName === 'edit' || toolName === 'write') {
-          const filePath = shortenPaperclipPaths(String(input.filePath || input.path || state.title || ''))
+          const filePath = cleanLogString(String(input.filePath || input.path || state.title || ''))
           const verb = toolName === 'read' ? 'Leu arquivo' : toolName === 'write' ? 'Criou arquivo' : 'Editou arquivo'
           entries.push({
             id: `log-${idx}`,
@@ -249,7 +328,7 @@ export function parseRunLog(raw: string): FormattedRunLogEntry[] {
             kind: status === 'error' ? 'error' : 'tool',
             status,
             title: `${verb}: ${filePath || '(sem caminho)'}`,
-            detail: status === 'error' && state.error ? shortenPaperclipPaths(String(state.error)) : undefined,
+            detail: status === 'error' && state.error ? cleanLogString(String(state.error)) : undefined,
           })
           return
         }
@@ -284,7 +363,7 @@ export function parseRunLog(raw: string): FormattedRunLogEntry[] {
             status === 'error' && state.error
               ? truncateLogText(String(state.error))
               : typeof state.output === 'string' && state.output.trim()
-                ? truncateLogText(shortenPaperclipPaths(state.output))
+                ? truncateLogText(state.output)
                 : undefined,
         })
         return
@@ -318,19 +397,23 @@ export function parseRunLog(raw: string): FormattedRunLogEntry[] {
           time: eventTime,
           kind: 'error',
           title: 'Erro na execução',
-          detail: String(inner.error?.message || inner.error || trimmedChunk),
+          detail: cleanLogString(String(inner.error?.message || inner.error || trimmedChunk)),
         })
         return
       }
     } catch {
-      // Chunk is plain text
+      // Chunk is plain text or partial non-JSON remainder
+    }
+
+    if (trimmedChunk.startsWith('{"type":') || trimmedChunk.startsWith('{"ts":')) {
+      return
     }
 
     entries.push({
       id: `log-${idx}`,
       time: ts,
       kind: stream === 'stderr' ? 'error' : 'info',
-      title: truncateLogText(shortenPaperclipPaths(trimmedChunk), 400),
+      title: truncateLogText(trimmedChunk, 400),
     })
   })
 

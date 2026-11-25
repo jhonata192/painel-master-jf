@@ -1103,8 +1103,8 @@ class ApiClient {
     return this.request<HeartbeatRun[]>(`/companies/${companyId}/live-runs`)
   }
 
-  async getRunLog(runId: string, offset = 0, limitBytes = 128000): Promise<{ runId: string; content: string; nextOffset?: number }> {
-    return this.request(`/heartbeat-runs/${runId}/log?offset=${offset}&limitBytes=${limitBytes}`)
+  async getRunLog(runId: string, offset = 0, limitBytes = 524288): Promise<{ runId: string; content: string; nextOffset?: number }> {
+    return this.request(`/heartbeat-runs/${runId}/log?offset=${offset}&limitBytes=${limitBytes}&alignStartToRecord=true`)
   }
 
   async cancelRun(runId: string): Promise<HeartbeatRun> {
