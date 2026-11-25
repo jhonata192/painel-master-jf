@@ -243,30 +243,42 @@ export function SettingsView({ company, onCompanyUpdated }: SettingsViewProps) {
             {connections.length === 0 ? (
               <p className="text-body-sm text-tertiary">Nenhuma conexão de IA configurada.</p>
             ) : (
-              connections.map((c) => (
-                <article key={c.id} className="card flex items-start justify-between gap-3 flex-wrap">
-                  <div className="stack-xs">
-                    <div className="flex items-center gap-2">
-                      <strong className="text-body">{c.label || c.provider}</strong>
-                      <span className="badge badge-brand">{c.method}</span>
-                      {c.routing?.protocol && <span className="badge badge-neutral">{c.routing.protocol}</span>}
-                    </div>
-                    {c.routing?.baseUrl && (
-                      <div className="text-caption text-mono text-tertiary">{c.routing.baseUrl}</div>
-                    )}
-                    {(c.routing?.models || c.models) && (
-                      <div className="flex items-center gap-1 flex-wrap mt-1">
-                        {(c.routing?.models || c.models || []).map((m) => (
-                          <span key={m} className="badge badge-info text-mono">{m}</span>
-                        ))}
+              connections.map((c) => {
+                const modelsList = c.routing?.models || c.models || []
+                return (
+                  <article key={c.id} className="card flex items-start justify-between gap-3 flex-wrap">
+                    <div className="stack-xs">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <strong className="text-body">{c.name || c.label || c.provider}</strong>
+                        <span className="badge badge-brand">{c.method}</span>
+                        {c.status && <span className="badge badge-success">{c.status}</span>}
+                        {c.routing?.protocol && <span className="badge badge-neutral">{c.routing.protocol}</span>}
                       </div>
+                      {c.routing?.baseUrl && (
+                        <div className="text-caption text-mono text-tertiary">{c.routing.baseUrl}</div>
+                      )}
+                      {modelsList.length > 0 && (
+                        <div className="flex items-center gap-1 flex-wrap mt-1">
+                          {modelsList.map((m, idx) => {
+                            const key = typeof m === 'string' ? m : m.id || String(idx)
+                            const label = typeof m === 'string' ? m : (m.label || m.id)
+                            return (
+                              <span key={key} className="badge badge-info text-mono">
+                                {label}
+                              </span>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                    {c.usageProbeSupported !== false && (
+                      <button className="btn btn-secondary btn-sm" onClick={() => handleProbeConnection(c)}>
+                        <RefreshCw size={14} /> Testar Uso
+                      </button>
                     )}
-                  </div>
-                  <button className="btn btn-secondary btn-sm" onClick={() => handleProbeConnection(c)}>
-                    <RefreshCw size={14} /> Testar Uso
-                  </button>
-                </article>
-              ))
+                  </article>
+                )
+              })
             )}
             {probeResult && (
               <pre className="log-console">{JSON.stringify(probeResult, null, 2)}</pre>

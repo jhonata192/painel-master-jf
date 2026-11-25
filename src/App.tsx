@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { Component, useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import {
   LayoutDashboard,
   MessageSquare,
@@ -45,6 +45,43 @@ const VIEWS = [
 ] as const
 
 type ViewId = (typeof VIEWS)[number]['id']
+
+class ViewErrorBoundary extends Component<
+  { children: ReactNode; onReset: () => void },
+  { error: Error | null }
+> {
+  constructor(props: { children: ReactNode; onReset: () => void }) {
+    super(props)
+    this.state = { error: null }
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="view-body">
+          <div className="error-inline" role="alert">
+            <div>
+              <strong>Erro ao renderizar esta seção</strong>
+              <p className="mt-2 text-body-sm">{this.state.error.message}</p>
+              <button
+                className="btn btn-primary btn-sm mt-3"
+                onClick={() => {
+                  this.setState({ error: null })
+                  this.props.onReset()
+                }}
+              >
+                Voltar ao Dashboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 function AppContent() {
   const {
@@ -458,7 +495,8 @@ function AppContent() {
         </nav>
 
         <div className="flex-1 flex flex-col min-h-0">
-          {activeView === 'dashboard' && (
+          <ViewErrorBoundary key={activeView} onReset={() => setActiveView('dashboard')}>
+            {activeView === 'dashboard' && (
             <DashboardView
               companyId={companyId}
               agents={agents}
@@ -525,9 +563,10 @@ function AppContent() {
             <CostsView companyId={companyId} agents={agents} />
           )}
 
-          {activeView === 'settings' && (
-            <SettingsView company={session.company} onCompanyUpdated={refetchSession} />
-          )}
+            {activeView === 'settings' && (
+              <SettingsView company={session.company} onCompanyUpdated={refetchSession} />
+            )}
+          </ViewErrorBoundary>
         </div>
       </main>
 

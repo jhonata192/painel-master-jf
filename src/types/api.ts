@@ -477,15 +477,17 @@ export interface AiConnection {
   companyId?: string
   provider: string
   method: string
+  name?: string
   label?: string
   status?: string
+  usageProbeSupported?: boolean
   routing?: {
     kind?: string
     protocol?: string
     baseUrl?: string
-    models?: string[]
+    models?: Array<string | { id: string; label?: string }>
   }
-  models?: string[]
+  models?: Array<string | { id: string; label?: string }>
   createdAt?: string
 }
 
