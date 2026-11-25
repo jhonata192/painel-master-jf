@@ -347,6 +347,44 @@ export function parseRunLog(raw: string): FormattedRunLogEntry[] {
           return
         }
 
+        if (toolName === 'todowrite' || toolName === 'todoread') {
+          let todos: Array<{ content?: string; status?: string }> = []
+          if (Array.isArray(input.todos)) {
+            todos = input.todos
+          } else if (typeof state.output === 'string' && state.output.trim().startsWith('[')) {
+            try {
+              const parsedTodos = JSON.parse(state.output)
+              if (Array.isArray(parsedTodos)) todos = parsedTodos
+            } catch {
+              // Ignore malformed todo JSON
+            }
+          }
+          const completedCount = todos.filter((t) => t?.status === 'completed').length
+          const lines = todos
+            .map((t) => {
+              const content = cleanLogString(String(t?.content || '')).trim()
+              if (!content) return ''
+              if (t?.status === 'completed') return `✓ ${content}`
+              if (t?.status === 'in_progress') return `⏳ ${content}`
+              if (t?.status === 'cancelled') return `✕ ${content}`
+              return `○ ${content}`
+            })
+            .filter(Boolean)
+
+          entries.push({
+            id: `log-${idx}`,
+            time: eventTime,
+            kind: status === 'error' ? 'error' : 'tool',
+            status,
+            title:
+              todos.length > 0
+                ? `Plano de tarefas (${completedCount}/${todos.length} concluída(s))`
+                : 'Plano de tarefas atualizado',
+            detail: lines.length > 0 ? truncateLogText(lines.join('\n'), 1200) : undefined,
+          })
+          return
+        }
+
         const inputSummary =
           typeof input.title === 'string'
             ? input.title

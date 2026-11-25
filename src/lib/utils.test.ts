@@ -281,5 +281,36 @@ describe('utils', () => {
       expect(entries[1].detail).toContain('diff --git')
       expect(entries[2].title).toBe('Comando: npm test')
     })
+
+    it('formats todowrite checklists into readable task items instead of raw JSON', () => {
+      const raw = JSON.stringify({
+        ts: '2026-11-25T16:35:05.000Z',
+        stream: 'stdout',
+        chunk:
+          JSON.stringify({
+            type: 'tool_use',
+            part: {
+              tool: 'todowrite',
+              state: {
+                status: 'completed',
+                input: {
+                  todos: [
+                    { content: 'Update courses.ejs modal', status: 'completed', priority: 'high' },
+                    { content: 'Update classes.ejs modal', status: 'in_progress', priority: 'high' },
+                    { content: 'Run tests', status: 'pending', priority: 'medium' },
+                  ],
+                },
+              },
+            },
+          }) + '\n',
+      })
+
+      const entries = parseRunLog(raw)
+      expect(entries).toHaveLength(1)
+      expect(entries[0].title).toBe('Plano de tarefas (1/3 concluída(s))')
+      expect(entries[0].detail).toContain('✓ Update courses.ejs modal')
+      expect(entries[0].detail).toContain('⏳ Update classes.ejs modal')
+      expect(entries[0].detail).toContain('○ Run tests')
+    })
   })
 })
