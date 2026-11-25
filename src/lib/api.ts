@@ -1103,8 +1103,35 @@ class ApiClient {
     return this.request<HeartbeatRun[]>(`/companies/${companyId}/live-runs`)
   }
 
-  async getRunLog(runId: string, offset = 0, limitBytes = 524288): Promise<{ runId: string; content: string; nextOffset?: number }> {
-    return this.request(`/heartbeat-runs/${runId}/log?offset=${offset}&limitBytes=${limitBytes}&alignStartToRecord=true`)
+  async getRunLog(runId: string, offset = 0, limitBytes = 1048576): Promise<{ runId: string; content: string; nextOffset?: number }> {
+    const chunks: string[] = []
+    let currentOffset = offset
+    let lastNextOffset: number | undefined
+    const maxPages = 5
+
+    for (let page = 0; page < maxPages; page += 1) {
+      const res = await this.request<{ runId: string; content: string; nextOffset?: number }>(
+        `/heartbeat-runs/${runId}/log?offset=${currentOffset}&limitBytes=${limitBytes}`
+      )
+      if (res.content) {
+        chunks.push(res.content)
+      }
+      lastNextOffset = res.nextOffset
+      if (
+        typeof res.nextOffset !== 'number' ||
+        res.nextOffset <= currentOffset ||
+        !res.content
+      ) {
+        break
+      }
+      currentOffset = res.nextOffset
+    }
+
+    return {
+      runId,
+      content: chunks.join(''),
+      nextOffset: lastNextOffset,
+    }
   }
 
   async cancelRun(runId: string): Promise<HeartbeatRun> {

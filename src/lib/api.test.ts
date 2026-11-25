@@ -276,4 +276,33 @@ describe('ApiClient — Paperclip full integration', () => {
     expect(res.messages[0].role).toBe('user')
     expect(res.messages[1].role).toBe('assistant')
   })
+
+  it('follows nextOffset pagination in getRunLog so large logs are read completely', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ runId: 'run-big', content: 'parte-1\n', nextOffset: 8 }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ runId: 'run-big', content: 'parte-2\n' }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const log = await api.getRunLog('run-big')
+    expect(log.content).toBe('parte-1\nparte-2\n')
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/heartbeat-runs/run-big/log?offset=0&limitBytes=1048576',
+      expect.any(Object)
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      '/api/heartbeat-runs/run-big/log?offset=8&limitBytes=1048576',
+      expect.any(Object)
+    )
+  })
 })
