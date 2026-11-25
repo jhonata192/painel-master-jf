@@ -164,9 +164,19 @@ class ApiClient {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
+      const baseMessage = errorData.error || errorData.message || `HTTP ${response.status}: ${response.statusText}`
+      const detailMessages = Array.isArray(errorData.details)
+        ? errorData.details
+            .map((d: any) => (typeof d?.message === 'string' ? d.message : null))
+            .filter((m: string | null): m is string => Boolean(m))
+        : []
+      const fullMessage =
+        detailMessages.length > 0 && !String(baseMessage).includes(detailMessages[0])
+          ? `${baseMessage}: ${detailMessages.slice(0, 2).join('; ')}`
+          : baseMessage
       throw new PaperclipApiError({
         code: errorData.code || 'API_ERROR',
-        message: errorData.error || errorData.message || `HTTP ${response.status}: ${response.statusText}`,
+        message: fullMessage,
         details: errorData.details,
         status: response.status,
       })

@@ -492,6 +492,13 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
   const handleAddWorkspace = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!wsProject || !wsName.trim()) return
+    if (!wsCwd.trim() && !wsRepo.trim()) {
+      showError(
+        'Informe um caminho local ou URL Git',
+        'Para adicionar um workspace manual, preencha o caminho da pasta (/home/...) ou a URL do repositório Git.'
+      )
+      return
+    }
     try {
       await api.createProjectWorkspace(
         wsProject.id,
@@ -506,6 +513,7 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
       setWsCwd('')
       setWsRepo('')
       setWorkspaces(await api.listProjectWorkspaces(wsProject.id, companyId))
+      loadAll()
       success('Workspace adicionado')
     } catch (err) {
       showError('Erro ao criar workspace', err instanceof Error ? err.message : 'Falha')
@@ -1009,19 +1017,8 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
                 )}
               </div>
 
-              <form onSubmit={handleAddWorkspace} className="card stack-sm">
-                <strong className="text-body-sm">Adicionar Workspace manual (pasta local ou URL)</strong>
-                <div className="grid grid-cols-2 gap-2">
-                  <input className="input-base" value={wsName} onChange={(e) => setWsName(e.target.value)} placeholder="Nome *" required aria-label="Nome do workspace" />
-                  <input className="input-base" value={wsCwd} onChange={(e) => setWsCwd(e.target.value)} placeholder="Caminho local (/home/...)" aria-label="Caminho do diretório" />
-                </div>
-                <input className="input-base" value={wsRepo} onChange={(e) => setWsRepo(e.target.value)} placeholder="URL do repositório Git (opcional)" aria-label="URL do repositório" />
-                <div className="flex justify-end">
-                  <button type="submit" className="btn btn-secondary btn-sm">Adicionar</button>
-                </div>
-              </form>
-
               <div className="stack-sm">
+                <strong className="text-body-sm">Workspaces vinculados ({workspaces.length})</strong>
                 {workspaces.length === 0 ? (
                   <p className="text-body-sm text-tertiary">Nenhum workspace configurado neste projeto.</p>
                 ) : (
@@ -1040,6 +1037,31 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
                   ))
                 )}
               </div>
+
+              <details className="card">
+                <summary className="text-body-sm" style={{ fontWeight: 600, cursor: 'pointer' }}>
+                  + Adicionar Workspace manual (pasta local ou URL Git)
+                </summary>
+                <form onSubmit={handleAddWorkspace} className="stack-sm mt-3">
+                  <p className="text-caption text-tertiary">
+                    Opcional: use apenas se quiser adicionar uma pasta local (`/home/...`) ou URL Git fora da lista acima. É obrigatório preencher o caminho local ou a URL.
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input className="input-base" value={wsName} onChange={(e) => setWsName(e.target.value)} placeholder="Nome *" required aria-label="Nome do workspace" />
+                    <input className="input-base text-mono" value={wsCwd} onChange={(e) => setWsCwd(e.target.value)} placeholder="Caminho local (/home/...)" aria-label="Caminho do diretório" />
+                  </div>
+                  <input className="input-base text-mono" type="url" value={wsRepo} onChange={(e) => setWsRepo(e.target.value)} placeholder="URL do repositório Git (ex: https://github.com/org/repo)" aria-label="URL do repositório" />
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      className="btn btn-secondary btn-sm"
+                      disabled={!wsName.trim() || (!wsCwd.trim() && !wsRepo.trim())}
+                    >
+                      Adicionar
+                    </button>
+                  </div>
+                </form>
+              </details>
             </div>
           </div>
         </div>
