@@ -207,4 +207,24 @@ describe('ApiClient — Paperclip full integration', () => {
     expect(res.messages[0].authorAgentId).toBe('22222222-2222-2222-2222-222222222222')
     expect(res.messages[1].content).toBe('Iniciando implementação agora.')
   })
+
+  it('sends valid UUID clientRequestId in sendMessage and addIssueComment', async () => {
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({ id: 'c-10', body: 'Oi', createdAt: '2026-11-25T13:00:00Z' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.sendMessage('issue-1', { content: 'Olá Sofia', clientRequestId: '' })
+    const sendBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+    expect(sendBody.body).toBe('Olá Sofia')
+    expect(sendBody.clientRequestId).toMatch(uuidRe)
+
+    await api.addIssueComment('issue-1', 'Comentário')
+    const commentBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body))
+    expect(commentBody.body).toBe('Comentário')
+    expect(commentBody.clientRequestId).toMatch(uuidRe)
+  })
 })

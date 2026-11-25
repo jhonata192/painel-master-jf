@@ -486,7 +486,7 @@ class ApiClient {
   async addIssueComment(issueId: string, body: string): Promise<IssueComment> {
     return this.request<IssueComment>(`/issues/${issueId}/comments`, {
       method: 'POST',
-      body: JSON.stringify({ body }),
+      body: JSON.stringify({ body, clientRequestId: generateClientRequestId() }),
     })
   }
 
@@ -732,9 +732,13 @@ class ApiClient {
   }
 
   async sendMessage(issueId: string, data: SendMessageRequest): Promise<SendMessageResponse> {
+    const clientRequestId =
+      data.clientRequestId && UUID_V4_RE.test(data.clientRequestId)
+        ? data.clientRequestId
+        : generateClientRequestId()
     const comment = await this.request<any>(`/issues/${issueId}/comments`, {
       method: 'POST',
-      body: JSON.stringify({ body: data.content }),
+      body: JSON.stringify({ body: data.content, clientRequestId }),
     })
     return {
       message: {
@@ -743,7 +747,7 @@ class ApiClient {
         role: 'user',
         content: data.content,
         timestamp: comment.createdAt ?? new Date().toISOString(),
-        clientRequestId: data.clientRequestId,
+        clientRequestId,
       },
       session: {
         id: issueId,
@@ -1142,6 +1146,22 @@ class ApiClient {
 
 export const api = new ApiClient()
 
+const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
 export function generateClientRequestId(): string {
-  return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID()
+  }
+  const bytes = new Uint8Array(16)
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    globalThis.crypto.getRandomValues(bytes)
+  } else {
+    for (let i = 0; i < 16; i += 1) {
+      bytes[i] = Math.floor(Math.random() * 256)
+    }
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0'))
+  return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10, 16).join('')}`
 }

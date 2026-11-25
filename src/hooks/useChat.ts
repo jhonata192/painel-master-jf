@@ -98,10 +98,10 @@ export function useChat({ companyId, agentRef, onNewMessage }: UseChatOptions) {
   )
 
   const sendMessage = useCallback(
-    async (content: string) => {
+    async (content: string, providedRequestId?: string) => {
       if (!session || !content.trim()) return
 
-      const clientRequestId = generateClientRequestId()
+      const clientRequestId = providedRequestId || generateClientRequestId()
       const optimisticMessage: Message = {
         id: `temp-${clientRequestId}`,
         sessionId: session.id,
@@ -172,11 +172,14 @@ export function useChat({ companyId, agentRef, onNewMessage }: UseChatOptions) {
 
   const sendMessageWithRetry = useCallback(
     async (content: string, retries = 3) => {
+      const clientRequestId = generateClientRequestId()
       for (let i = 0; i < retries; i++) {
         try {
-          await sendMessage(content)
+          await sendMessage(content, clientRequestId)
           return
         } catch (err) {
+          const status = (err as { status?: number } | null)?.status
+          if (status && status >= 400 && status < 500) throw err
           if (i === retries - 1) throw err
           await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1)))
         }
