@@ -48,6 +48,173 @@ const PROJECT_STATUS_LABELS: Record<string, string> = {
   cancelled: 'Cancelado',
 }
 
+function matchWorkspaceRepoIds(
+  wsList: ProjectWorkspace[],
+  repoList: ProjectRepositoryOptions['repositories']
+): string[] {
+  const byId = new Set(
+    wsList
+      .map((w) => w.metadata?.githubRepositoryId)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)
+  )
+  const byUrl = new Set(
+    wsList
+      .map((w) => w.repoUrl?.trim().toLowerCase())
+      .filter((u): u is string => Boolean(u))
+  )
+  return repoList
+    .filter((r) => byId.has(r.id) || byUrl.has(r.url.trim().toLowerCase()))
+    .map((r) => r.id)
+}
+
+interface GitHubRepoPickerProps {
+  inputId: string
+  repoOptions: ProjectRepositoryOptions | null
+  selectedIds: string[]
+  onToggle: (repoId: string) => void
+  loading: boolean
+  disabled?: boolean
+}
+
+function GitHubRepoPicker({
+  inputId,
+  repoOptions,
+  selectedIds,
+  onToggle,
+  loading,
+  disabled = false,
+}: GitHubRepoPickerProps) {
+  const [search, setSearch] = useState('')
+  const filteredRepos = useMemo(() => {
+    const list = repoOptions?.repositories ?? []
+    const q = search.trim().toLowerCase()
+    if (!q) return list
+    return list.filter(
+      (r) =>
+        r.fullName.toLowerCase().includes(q) ||
+        r.connections.some((c) => c.toLowerCase().includes(q))
+    )
+  }, [repoOptions, search])
+
+  return (
+    <div className="stack-xs">
+      {selectedIds.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap mb-1">
+          {selectedIds.map((repoId) => {
+            const repo = repoOptions?.repositories.find((r) => r.id === repoId)
+            return (
+              <span key={repoId} className="badge badge-info flex items-center gap-1">
+                <GitBranch size={12} />
+                <span>{repo?.fullName ?? repoId}</span>
+                {repo?.private && <Lock size={11} aria-label="Privado" />}
+                <button
+                  type="button"
+                  onClick={() => onToggle(repoId)}
+                  disabled={disabled}
+                  aria-label={`Remover repositório ${repo?.fullName ?? repoId}`}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'inherit',
+                    cursor: 'pointer',
+                    padding: 0,
+                    display: 'inline-flex',
+                  }}
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            )
+          })}
+        </div>
+      )}
+
+      {loading ? (
+        <p className="text-caption text-tertiary">Carregando repositórios conectados...</p>
+      ) : repoOptions && repoOptions.repositories.length > 0 ? (
+        <>
+          <div className="relative flex items-center">
+            <Search size={14} style={{ position: 'absolute', left: '10px', opacity: 0.6, pointerEvents: 'none' }} />
+            <input
+              id={inputId}
+              type="text"
+              className="input-base"
+              style={{ paddingLeft: '32px' }}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={`Buscar entre ${repoOptions.repositories.length} repositórios do GitHub...`}
+              disabled={disabled}
+            />
+          </div>
+          <div
+            role="listbox"
+            aria-label="Repositórios GitHub disponíveis"
+            aria-multiselectable="true"
+            style={{
+              maxHeight: '150px',
+              overflowY: 'auto',
+              border: '1px solid var(--color-border-default)',
+              borderRadius: '8px',
+              backgroundColor: 'var(--color-bg-surface)',
+            }}
+          >
+            {filteredRepos.length === 0 ? (
+              <div className="p-2 text-caption text-tertiary">
+                Nenhum repositório encontrado para "{search}".
+              </div>
+            ) : (
+              filteredRepos.map((repo) => {
+                const isSelected = selectedIds.includes(repo.id)
+                return (
+                  <button
+                    key={repo.id}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => onToggle(repo.id)}
+                    disabled={disabled}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '8px',
+                      padding: '7px 10px',
+                      textAlign: 'left',
+                      backgroundColor: isSelected ? 'rgba(99, 102, 241, 0.14)' : 'transparent',
+                      border: 'none',
+                      borderBottom: '1px solid var(--color-border-subtle)',
+                      color: 'inherit',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                    }}
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <GitBranch size={13} style={{ flexShrink: 0, opacity: 0.7 }} />
+                      <span className="text-truncate">{repo.fullName}</span>
+                      {repo.private && (
+                        <Lock size={12} style={{ flexShrink: 0, opacity: 0.7 }} aria-label="Repositório privado" />
+                      )}
+                    </span>
+                    <span className="flex items-center gap-2 flex-shrink-0 text-caption text-tertiary">
+                      {repo.connections.join(' · ')}
+                      {isSelected && <Check size={14} style={{ color: 'var(--color-brand-primary)' }} />}
+                    </span>
+                  </button>
+                )
+              })
+            )}
+          </div>
+        </>
+      ) : (
+        <p className="text-caption text-tertiary">
+          Nenhum repositório GitHub conectado disponível no momento.
+        </p>
+      )}
+    </div>
+  )
+}
+
 interface ProjectsViewProps {
   companyId: string
   agents: Agent[]
@@ -75,7 +242,6 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
   const [projRepoUrl, setProjRepoUrl] = useState('')
   const [selectedRepoIds, setSelectedRepoIds] = useState<string[]>([])
   const [initialRepoIds, setInitialRepoIds] = useState<string[]>([])
-  const [repoSearch, setRepoSearch] = useState('')
   const [envOptions, setEnvOptions] = useState<ProjectEnvironmentOptions | null>(null)
   const [selectedEnvId, setSelectedEnvId] = useState('')
   const [repoOptions, setRepoOptions] = useState<ProjectRepositoryOptions | null>(null)
@@ -85,6 +251,10 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
   // Workspaces modal
   const [wsProject, setWsProject] = useState<Project | null>(null)
   const [workspaces, setWorkspaces] = useState<ProjectWorkspace[]>([])
+  const [wsSelectedRepoIds, setWsSelectedRepoIds] = useState<string[]>([])
+  const [wsInitialRepoIds, setWsInitialRepoIds] = useState<string[]>([])
+  const [loadingWsOptions, setLoadingWsOptions] = useState(false)
+  const [savingWsRepos, setSavingWsRepos] = useState(false)
   const [wsName, setWsName] = useState('')
   const [wsCwd, setWsCwd] = useState('')
   const [wsRepo, setWsRepo] = useState('')
@@ -140,19 +310,14 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
     )
   }, [envOptions, selectedEnvId])
 
-  const filteredRepos = useMemo(() => {
-    const list = repoOptions?.repositories ?? []
-    const q = repoSearch.trim().toLowerCase()
-    if (!q) return list
-    return list.filter(
-      (r) =>
-        r.fullName.toLowerCase().includes(q) ||
-        r.connections.some((c) => c.toLowerCase().includes(q))
-    )
-  }, [repoOptions, repoSearch])
-
   const toggleRepo = (repoId: string) => {
     setSelectedRepoIds((prev) =>
+      prev.includes(repoId) ? prev.filter((id) => id !== repoId) : [...prev, repoId]
+    )
+  }
+
+  const toggleWsRepo = (repoId: string) => {
+    setWsSelectedRepoIds((prev) =>
       prev.includes(repoId) ? prev.filter((id) => id !== repoId) : [...prev, repoId]
     )
   }
@@ -169,7 +334,6 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
     setProjTargetDate(p?.targetDate ? String(p.targetDate).slice(0, 10) : '')
     setProjCwd('')
     setProjRepoUrl('')
-    setRepoSearch('')
     setSelectedRepoIds([])
     setInitialRepoIds([])
     setShowProjModal(true)
@@ -196,14 +360,7 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
       if (repoRes.status === 'fulfilled') {
         setRepoOptions(repoRes.value)
         if (p?.workspaces?.length) {
-          const wsUrls = new Set(
-            p.workspaces
-              .map((w) => w.repoUrl?.trim().toLowerCase())
-              .filter((u): u is string => Boolean(u))
-          )
-          const matchedIds = repoRes.value.repositories
-            .filter((r) => wsUrls.has(r.url.trim().toLowerCase()))
-            .map((r) => r.id)
+          const matchedIds = matchWorkspaceRepoIds(p.workspaces, repoRes.value.repositories)
           setSelectedRepoIds(matchedIds)
           setInitialRepoIds(matchedIds)
         }
@@ -293,10 +450,42 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
 
   const openWorkspaces = async (p: Project) => {
     setWsProject(p)
+    setWsSelectedRepoIds([])
+    setWsInitialRepoIds([])
+    setLoadingWsOptions(true)
     try {
-      setWorkspaces(await api.listProjectWorkspaces(p.id, companyId))
-    } catch {
-      setWorkspaces([])
+      const [wsRes, repoRes] = await Promise.allSettled([
+        api.listProjectWorkspaces(p.id, companyId),
+        api.listProjectRepositories(companyId),
+      ])
+      const loadedWs = wsRes.status === 'fulfilled' ? wsRes.value : []
+      setWorkspaces(loadedWs)
+
+      if (repoRes.status === 'fulfilled') {
+        setRepoOptions(repoRes.value)
+        const matched = matchWorkspaceRepoIds(loadedWs, repoRes.value.repositories)
+        setWsSelectedRepoIds(matched)
+        setWsInitialRepoIds(matched)
+      }
+    } finally {
+      setLoadingWsOptions(false)
+    }
+  }
+
+  const handleSaveWsRepositories = async () => {
+    if (!wsProject || savingWsRepos) return
+    setSavingWsRepos(true)
+    try {
+      await api.setProjectRepositories(wsProject.id, wsSelectedRepoIds, companyId)
+      const updatedWs = await api.listProjectWorkspaces(wsProject.id, companyId)
+      setWorkspaces(updatedWs)
+      setWsInitialRepoIds(wsSelectedRepoIds)
+      success('Repositórios GitHub atualizados')
+      loadAll()
+    } catch (err) {
+      showError('Erro ao vincular repositórios', err instanceof Error ? err.message : 'Falha')
+    } finally {
+      setSavingWsRepos(false)
     }
   }
 
@@ -627,108 +816,14 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
                   <label htmlFor="proj-repo-search" className="label">Repositórios de origem (GitHub)</label>
                   <span className="text-caption text-tertiary">opcional</span>
                 </div>
-
-                {selectedRepoIds.length > 0 && (
-                  <div className="flex items-center gap-1.5 flex-wrap mb-2">
-                    {selectedRepoIds.map((repoId) => {
-                      const repo = repoOptions?.repositories.find((r) => r.id === repoId)
-                      return (
-                        <span key={repoId} className="badge badge-info flex items-center gap-1">
-                          <GitBranch size={12} />
-                          <span>{repo?.fullName ?? repoId}</span>
-                          {repo?.private && <Lock size={11} aria-label="Privado" />}
-                          <button
-                            type="button"
-                            onClick={() => toggleRepo(repoId)}
-                            aria-label={`Remover repositório ${repo?.fullName ?? repoId}`}
-                            style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 0, display: 'inline-flex' }}
-                          >
-                            <X size={12} />
-                          </button>
-                        </span>
-                      )
-                    })}
-                  </div>
-                )}
-
-                {loadingOptions ? (
-                  <p className="text-caption text-tertiary">Carregando repositórios conectados...</p>
-                ) : repoOptions && repoOptions.repositories.length > 0 ? (
-                  <div className="stack-xs">
-                    <div className="relative flex items-center">
-                      <Search size={14} style={{ position: 'absolute', left: '10px', opacity: 0.6, pointerEvents: 'none' }} />
-                      <input
-                        id="proj-repo-search"
-                        type="text"
-                        className="input-base"
-                        style={{ paddingLeft: '32px' }}
-                        value={repoSearch}
-                        onChange={(e) => setRepoSearch(e.target.value)}
-                        placeholder={`Buscar entre ${repoOptions.repositories.length} repositórios do GitHub...`}
-                        disabled={savingProject}
-                      />
-                    </div>
-                    <div
-                      role="listbox"
-                      aria-label="Repositórios GitHub disponíveis"
-                      aria-multiselectable="true"
-                      style={{
-                        maxHeight: '150px',
-                        overflowY: 'auto',
-                        border: '1px solid var(--color-border-default)',
-                        borderRadius: '8px',
-                        backgroundColor: 'var(--color-bg-surface)',
-                      }}
-                    >
-                      {filteredRepos.length === 0 ? (
-                        <div className="p-2 text-caption text-tertiary">Nenhum repositório encontrado para "{repoSearch}".</div>
-                      ) : (
-                        filteredRepos.map((repo) => {
-                          const isSelected = selectedRepoIds.includes(repo.id)
-                          return (
-                            <button
-                              key={repo.id}
-                              type="button"
-                              role="option"
-                              aria-selected={isSelected}
-                              onClick={() => toggleRepo(repo.id)}
-                              disabled={savingProject}
-                              style={{
-                                width: '100%',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                gap: '8px',
-                                padding: '7px 10px',
-                                textAlign: 'left',
-                                backgroundColor: isSelected ? 'rgba(99, 102, 241, 0.14)' : 'transparent',
-                                border: 'none',
-                                borderBottom: '1px solid var(--color-border-subtle)',
-                                color: 'inherit',
-                                cursor: 'pointer',
-                                fontSize: '13px',
-                              }}
-                            >
-                              <span className="flex items-center gap-2 min-w-0">
-                                <GitBranch size={13} style={{ flexShrink: 0, opacity: 0.7 }} />
-                                <span className="text-truncate">{repo.fullName}</span>
-                                {repo.private && <Lock size={12} style={{ flexShrink: 0, opacity: 0.7 }} aria-label="Repositório privado" />}
-                              </span>
-                              <span className="flex items-center gap-2 flex-shrink-0 text-caption text-tertiary">
-                                {repo.connections.join(' · ')}
-                                {isSelected && <Check size={14} style={{ color: 'var(--color-brand-primary)' }} />}
-                              </span>
-                            </button>
-                          )
-                        })
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-caption text-tertiary">
-                    Nenhum repositório GitHub conectado disponível no momento.
-                  </p>
-                )}
+                <GitHubRepoPicker
+                  inputId="proj-repo-search"
+                  repoOptions={repoOptions}
+                  selectedIds={selectedRepoIds}
+                  onToggle={toggleRepo}
+                  loading={loadingOptions}
+                  disabled={savingProject}
+                />
               </div>
 
               {!editProject && (
@@ -878,21 +973,51 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
       {wsProject && (
         <div className="modal-overlay-flex" role="dialog" aria-modal="true" aria-labelledby="ws-modal-title">
           <div className="modal-backdrop" onClick={() => setWsProject(null)} aria-hidden="true" />
-          <div className="modal-card modal-card--lg">
+          <div className="modal-card modal-card--lg" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
             <div className="modal__header">
               <h3 id="ws-modal-title" className="modal__title">Workspaces — {wsProject.name}</h3>
               <button className="modal__close" onClick={() => setWsProject(null)} aria-label="Fechar"><XCircle size={20} /></button>
             </div>
-            <div className="modal__body stack-lg">
+            <div className="modal__body stack-lg" style={{ overflowY: 'auto' }}>
+              <div className="card stack-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <strong className="text-body-sm">Repositórios GitHub conectados</strong>
+                  <span className="text-caption text-tertiary">selecione direto da sua conta</span>
+                </div>
+                <GitHubRepoPicker
+                  inputId="ws-repo-search"
+                  repoOptions={repoOptions}
+                  selectedIds={wsSelectedRepoIds}
+                  onToggle={toggleWsRepo}
+                  loading={loadingWsOptions}
+                  disabled={savingWsRepos}
+                />
+                {repoOptions && repoOptions.repositories.length > 0 && (
+                  <div className="flex justify-end pt-1">
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={handleSaveWsRepositories}
+                      disabled={
+                        savingWsRepos ||
+                        [...wsSelectedRepoIds].sort().join(',') === [...wsInitialRepoIds].sort().join(',')
+                      }
+                    >
+                      {savingWsRepos ? 'Salvando...' : 'Salvar repositórios GitHub'}
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <form onSubmit={handleAddWorkspace} className="card stack-sm">
-                <strong className="text-body-sm">Adicionar Workspace</strong>
+                <strong className="text-body-sm">Adicionar Workspace manual (pasta local ou URL)</strong>
                 <div className="grid grid-cols-2 gap-2">
                   <input className="input-base" value={wsName} onChange={(e) => setWsName(e.target.value)} placeholder="Nome *" required aria-label="Nome do workspace" />
                   <input className="input-base" value={wsCwd} onChange={(e) => setWsCwd(e.target.value)} placeholder="Caminho local (/home/...)" aria-label="Caminho do diretório" />
                 </div>
                 <input className="input-base" value={wsRepo} onChange={(e) => setWsRepo(e.target.value)} placeholder="URL do repositório Git (opcional)" aria-label="URL do repositório" />
                 <div className="flex justify-end">
-                  <button type="submit" className="btn btn-primary btn-sm">Adicionar</button>
+                  <button type="submit" className="btn btn-secondary btn-sm">Adicionar</button>
                 </div>
               </form>
 

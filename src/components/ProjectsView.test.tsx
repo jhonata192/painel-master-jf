@@ -168,4 +168,94 @@ describe('ProjectsView', () => {
     expect(projectsCalls).toBe(2)
     expect(goalsCalls).toBe(2)
   })
+
+  it('allows selecting connected GitHub repositories directly inside the Workspaces modal', async () => {
+    let putRepoPayload: { repositoryIds: string[] } | null = null
+    const existingProject = {
+      id: 'proj-1',
+      companyId: 'comp-1',
+      name: 'acessilia gestor',
+      status: 'planned',
+      workspaces: [],
+      createdAt: '2026-11-25T12:00:00Z',
+      updatedAt: '2026-11-25T12:00:00Z',
+    }
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.endsWith('/projects') && (!init?.method || init.method === 'GET')) {
+          return Promise.resolve({ ok: true, status: 200, json: async () => [existingProject] })
+        }
+        if (url.endsWith('/goals') && (!init?.method || init.method === 'GET')) {
+          return Promise.resolve({ ok: true, status: 200, json: async () => [] })
+        }
+        if (url.includes('/workspaces') && (!init?.method || init.method === 'GET')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () =>
+              putRepoPayload
+                ? [
+                    {
+                      id: 'ws-gh-1',
+                      projectId: 'proj-1',
+                      name: 'A11yDevs/acessilia',
+                      repoUrl: 'https://github.com/A11yDevs/acessilia',
+                      metadata: { githubRepositoryId: '1238969852' },
+                    },
+                  ]
+                : [],
+          })
+        }
+        if (url.endsWith('/project-repositories')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              repositories: [
+                {
+                  id: '1238969852',
+                  fullName: 'A11yDevs/acessilia',
+                  url: 'https://github.com/A11yDevs/acessilia',
+                  private: false,
+                  connections: ['GitHub'],
+                },
+              ],
+              connectionCount: 1,
+              failedConnectionCount: 0,
+            }),
+          })
+        }
+        if (url.includes('/projects/proj-1/repositories') && init?.method === 'PUT') {
+          putRepoPayload = JSON.parse(String(init.body || '{}'))
+          return Promise.resolve({ ok: true, status: 200, json: async () => existingProject })
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => [] })
+      })
+    )
+
+    render(
+      <ToastProvider>
+        <ProjectsView companyId="comp-1" agents={[]} />
+      </ToastProvider>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('acessilia gestor')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Workspaces/i }))
+    await waitFor(() => {
+      expect(screen.getByText('A11yDevs/acessilia')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('option', { name: /A11yDevs\/acessilia/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Salvar repositórios GitHub/i }))
+
+    await waitFor(() => {
+      expect(putRepoPayload).toEqual({ repositoryIds: ['1238969852'] })
+      expect(screen.getByText('Repositórios GitHub atualizados')).toBeInTheDocument()
+    })
+  })
 })

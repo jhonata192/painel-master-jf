@@ -339,6 +339,7 @@ export interface ProjectWorkspace {
   repoUrl?: string | null
   repoRef?: string | null
   isPrimary?: boolean
+  metadata?: Record<string, unknown> | null
   runtimeServices?: Array<{
     id: string
     name: string
