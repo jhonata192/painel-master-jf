@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   FolderKanban,
   Target,
@@ -8,11 +8,45 @@ import {
   RotateCcw,
   FolderGit2,
   XCircle,
+  Search,
+  Lock,
+  GitBranch,
+  Check,
+  X,
 } from 'lucide-react'
 import { cn, formatTimestamp } from '../lib/utils'
 import { api } from '../lib/api'
 import { useToastHelpers } from '../context/ToastContext'
-import type { Agent, Goal, Project, ProjectWorkspace } from '../types/api'
+import type {
+  Agent,
+  CreateProjectPayload,
+  Goal,
+  Project,
+  ProjectEnvironmentOptions,
+  ProjectRepositoryOptions,
+  ProjectWorkspace,
+} from '../types/api'
+
+const PROJECT_COLORS = [
+  '#6366f1',
+  '#8b5cf6',
+  '#ec4899',
+  '#ef4444',
+  '#f97316',
+  '#eab308',
+  '#22c55e',
+  '#14b8a6',
+  '#06b6d4',
+  '#3b82f6',
+] as const
+
+const PROJECT_STATUS_LABELS: Record<string, string> = {
+  planned: 'Planejado',
+  in_progress: 'Em Andamento',
+  completed: 'Concluído',
+  backlog: 'Backlog',
+  cancelled: 'Cancelado',
+}
 
 interface ProjectsViewProps {
   companyId: string
@@ -32,8 +66,21 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
   const [projName, setProjName] = useState('')
   const [projDesc, setProjDesc] = useState('')
   const [projStatus, setProjStatus] = useState('planned')
+  const [projVisibility, setProjVisibility] = useState<'open' | 'private'>('open')
+  const [projColor, setProjColor] = useState<string>(PROJECT_COLORS[0])
   const [projLead, setProjLead] = useState('')
   const [projGoal, setProjGoal] = useState('')
+  const [projTargetDate, setProjTargetDate] = useState('')
+  const [projCwd, setProjCwd] = useState('')
+  const [projRepoUrl, setProjRepoUrl] = useState('')
+  const [selectedRepoIds, setSelectedRepoIds] = useState<string[]>([])
+  const [initialRepoIds, setInitialRepoIds] = useState<string[]>([])
+  const [repoSearch, setRepoSearch] = useState('')
+  const [envOptions, setEnvOptions] = useState<ProjectEnvironmentOptions | null>(null)
+  const [selectedEnvId, setSelectedEnvId] = useState('')
+  const [repoOptions, setRepoOptions] = useState<ProjectRepositoryOptions | null>(null)
+  const [loadingOptions, setLoadingOptions] = useState(false)
+  const [savingProject, setSavingProject] = useState(false)
 
   // Workspaces modal
   const [wsProject, setWsProject] = useState<Project | null>(null)
@@ -71,38 +118,165 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
     loadAll()
   }, [loadAll])
 
-  const openProjectModal = (p?: Project) => {
+  useEffect(() => {
+    if (!showProjModal && !showGoalModal && !wsProject) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (showProjModal && !savingProject) setShowProjModal(false)
+      else if (showGoalModal) setShowGoalModal(false)
+      else if (wsProject) setWsProject(null)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [showProjModal, showGoalModal, wsProject, savingProject])
+
+  const selectedEnvGroup = useMemo(() => {
+    if (!envOptions?.groups?.length) return null
+    const id = selectedEnvId || envOptions.defaultEnvironmentId
+    return (
+      envOptions.groups.find((g) => g.environments.some((env) => env.id === id)) ??
+      envOptions.groups[0] ??
+      null
+    )
+  }, [envOptions, selectedEnvId])
+
+  const filteredRepos = useMemo(() => {
+    const list = repoOptions?.repositories ?? []
+    const q = repoSearch.trim().toLowerCase()
+    if (!q) return list
+    return list.filter(
+      (r) =>
+        r.fullName.toLowerCase().includes(q) ||
+        r.connections.some((c) => c.toLowerCase().includes(q))
+    )
+  }, [repoOptions, repoSearch])
+
+  const toggleRepo = (repoId: string) => {
+    setSelectedRepoIds((prev) =>
+      prev.includes(repoId) ? prev.filter((id) => id !== repoId) : [...prev, repoId]
+    )
+  }
+
+  const openProjectModal = async (p?: Project) => {
     setEditProject(p ?? null)
     setProjName(p?.name ?? '')
     setProjDesc(p?.description ?? '')
     setProjStatus(p?.status ?? 'planned')
+    setProjVisibility(p?.visibility === 'private' ? 'private' : 'open')
+    setProjColor(p?.color || PROJECT_COLORS[Math.floor(Math.random() * PROJECT_COLORS.length)])
     setProjLead(p?.leadAgentId ?? '')
-    setProjGoal(p?.goalId ?? '')
+    setProjGoal(p?.goalId ?? p?.goalIds?.[0] ?? '')
+    setProjTargetDate(p?.targetDate ? String(p.targetDate).slice(0, 10) : '')
+    setProjCwd('')
+    setProjRepoUrl('')
+    setRepoSearch('')
+    setSelectedRepoIds([])
+    setInitialRepoIds([])
     setShowProjModal(true)
+
+    setLoadingOptions(true)
+    try {
+      const [envRes, repoRes] = await Promise.allSettled([
+        api.listProjectEnvironments(companyId),
+        api.listProjectRepositories(companyId),
+      ])
+
+      if (envRes.status === 'fulfilled') {
+        setEnvOptions(envRes.value)
+        setSelectedEnvId(
+          envRes.value.defaultEnvironmentId ??
+            envRes.value.groups[0]?.environments[0]?.id ??
+            ''
+        )
+      } else {
+        setEnvOptions(null)
+        setSelectedEnvId('')
+      }
+
+      if (repoRes.status === 'fulfilled') {
+        setRepoOptions(repoRes.value)
+        if (p?.workspaces?.length) {
+          const wsUrls = new Set(
+            p.workspaces
+              .map((w) => w.repoUrl?.trim().toLowerCase())
+              .filter((u): u is string => Boolean(u))
+          )
+          const matchedIds = repoRes.value.repositories
+            .filter((r) => wsUrls.has(r.url.trim().toLowerCase()))
+            .map((r) => r.id)
+          setSelectedRepoIds(matchedIds)
+          setInitialRepoIds(matchedIds)
+        }
+      } else {
+        setRepoOptions(null)
+      }
+    } finally {
+      setLoadingOptions(false)
+    }
   }
 
   const handleSaveProject = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!projName.trim()) return
+    if (!projName.trim() || savingProject) return
+    setSavingProject(true)
     try {
-      const payload = {
+      const basePayload = {
         name: projName.trim(),
         description: projDesc.trim() || null,
         status: projStatus,
+        visibility: projVisibility,
+        color: projColor,
         leadAgentId: projLead || null,
         goalId: projGoal || null,
+        targetDate: projTargetDate || null,
       }
       if (editProject) {
-        await api.updateProject(editProject.id, payload, companyId)
+        await api.updateProject(editProject.id, basePayload, companyId)
+        const prevSorted = [...initialRepoIds].sort().join(',')
+        const nextSorted = [...selectedRepoIds].sort().join(',')
+        if (repoOptions && prevSorted !== nextSorted) {
+          await api.setProjectRepositories(editProject.id, selectedRepoIds, companyId)
+        }
         success('Projeto atualizado')
       } else {
-        await api.createProject(companyId, payload)
+        const effectiveEnvId = selectedEnvId || envOptions?.defaultEnvironmentId || ''
+        const manualUrls = projRepoUrl.trim() ? [projRepoUrl.trim()] : []
+        const hasRepoSelection = selectedRepoIds.length > 0 || manualUrls.length > 0
+        const payload: CreateProjectPayload = {
+          ...basePayload,
+          ...(selectedEnvGroup && effectiveEnvId
+            ? {
+                environmentId: effectiveEnvId,
+                expectedStorageProviderPluginId: selectedEnvGroup.storageProviderPluginId,
+              }
+            : {}),
+          ...(selectedRepoIds.length > 0 ? { repositoryIds: selectedRepoIds } : {}),
+          ...(manualUrls.length > 0 ? { repositoryUrls: manualUrls } : {}),
+          ...(!hasRepoSelection && projCwd.trim()
+            ? {
+                workspace: {
+                  name: projName.trim(),
+                  cwd: projCwd.trim(),
+                },
+              }
+            : {}),
+        }
+        const created = await api.createProject(companyId, payload)
+        if (hasRepoSelection && projCwd.trim()) {
+          await api.createProjectWorkspace(
+            created.id,
+            { name: 'Local', cwd: projCwd.trim() },
+            companyId
+          )
+        }
         success('Projeto criado')
       }
       setShowProjModal(false)
       loadAll()
     } catch (err) {
       showError('Erro ao salvar projeto', err instanceof Error ? err.message : 'Falha')
+    } finally {
+      setSavingProject(false)
     }
   }
 
@@ -260,6 +434,7 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
               {projects.map((p) => {
                 const lead = agents.find((a) => a.id === p.leadAgentId)
                 const goal = goals.find((g) => g.id === p.goalId)
+                const repoCount = p.workspaces?.length ?? 0
                 return (
                   <article key={p.id} className="card stack-sm">
                     <div className="flex items-start justify-between gap-2">
@@ -277,12 +452,28 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
                           {p.name}
                         </h3>
                       </div>
-                      <span className="badge badge-info">{p.status}</span>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {p.visibility === 'private' && (
+                          <span className="badge badge-neutral" title="Projeto privado">
+                            <Lock size={11} /> Privado
+                          </span>
+                        )}
+                        <span className="badge badge-info">
+                          {PROJECT_STATUS_LABELS[p.status] ?? p.status}
+                        </span>
+                      </div>
                     </div>
                     <p className="text-body-sm text-secondary">{p.description || 'Sem descrição'}</p>
                     <div className="text-caption text-tertiary">
                       {lead && <div>Líder: {lead.name}</div>}
                       {goal && <div>Meta: {goal.title}</div>}
+                      {repoCount > 0 && (
+                        <div>
+                          Repositórios/Workspaces: {repoCount} (
+                          {p.workspaces!.map((w) => w.name).slice(0, 2).join(', ')}
+                          {repoCount > 2 ? ` +${repoCount - 2}` : ''})
+                        </div>
+                      )}
                       <div>Atualizado {formatTimestamp(p.updatedAt)}</div>
                     </div>
                     <div className="flex items-center gap-2 flex-wrap mt-2">
@@ -344,25 +535,239 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
       {/* Modal Projeto */}
       {showProjModal && (
         <div className="modal-overlay-flex" role="dialog" aria-modal="true" aria-labelledby="proj-modal-title">
-          <div className="modal-backdrop" onClick={() => setShowProjModal(false)} aria-hidden="true" />
-          <div className="modal-card">
+          <div className="modal-backdrop" onClick={() => !savingProject && setShowProjModal(false)} aria-hidden="true" />
+          <div className="modal-card modal-card--lg" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}>
             <div className="modal__header">
-              <h3 id="proj-modal-title" className="modal__title">{editProject ? 'Editar Projeto' : 'Novo Projeto'}</h3>
-              <button className="modal__close" onClick={() => setShowProjModal(false)} aria-label="Fechar"><XCircle size={20} /></button>
-            </div>
-            <form onSubmit={handleSaveProject} className="modal__body stack-md">
-              <div>
-                <label htmlFor="proj-name" className="label">Nome *</label>
-                <input id="proj-name" className="input-base" value={projName} onChange={(e) => setProjName(e.target.value)} required autoFocus />
+              <div className="flex items-center gap-2">
+                <span
+                  style={{
+                    width: '12px',
+                    height: '12px',
+                    borderRadius: '9999px',
+                    backgroundColor: projColor,
+                    display: 'inline-block',
+                  }}
+                />
+                <h3 id="proj-modal-title" className="modal__title">{editProject ? 'Editar Projeto' : 'Novo Projeto'}</h3>
               </div>
+              <button className="modal__close" onClick={() => !savingProject && setShowProjModal(false)} aria-label="Fechar" disabled={savingProject}>
+                <XCircle size={20} />
+              </button>
+            </div>
+            <form onSubmit={handleSaveProject} className="modal__body stack-md" style={{ overflowY: 'auto' }}>
+              <div className="grid grid-cols-1 gap-3" style={{ gridTemplateColumns: '1fr auto' }}>
+                <div>
+                  <label htmlFor="proj-name" className="label">Nome *</label>
+                  <input id="proj-name" className="input-base" value={projName} onChange={(e) => setProjName(e.target.value)} placeholder="Nome do projeto" required autoFocus disabled={savingProject} />
+                </div>
+                <div>
+                  <span className="label">Cor</span>
+                  <div className="flex items-center gap-1.5 flex-wrap" style={{ paddingTop: '6px' }} role="group" aria-label="Cor do projeto">
+                    {PROJECT_COLORS.map((color) => (
+                      <button
+                        key={color}
+                        type="button"
+                        onClick={() => setProjColor(color)}
+                        aria-label={`Selecionar cor ${color}`}
+                        aria-pressed={projColor === color}
+                        style={{
+                          width: '20px',
+                          height: '20px',
+                          borderRadius: '9999px',
+                          backgroundColor: color,
+                          border: projColor === color ? '2px solid #fff' : '2px solid transparent',
+                          boxShadow: projColor === color ? `0 0 0 2px ${color}` : 'none',
+                          cursor: 'pointer',
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {!editProject && envOptions && envOptions.groups.length > 0 && (
+                <div>
+                  {envOptions.groups.length > 1 ? (
+                    <>
+                      <label htmlFor="proj-env" className="label">Ambiente de execução</label>
+                      <select
+                        id="proj-env"
+                        className="input-base"
+                        value={selectedEnvGroup?.environments[0]?.id ?? selectedEnvId}
+                        onChange={(e) => setSelectedEnvId(e.target.value)}
+                        disabled={savingProject}
+                      >
+                        {envOptions.groups.map((group) => {
+                          const firstId = group.environments[0]?.id
+                          if (!firstId) return null
+                          return (
+                            <option key={firstId} value={firstId}>
+                              {group.environments.map((env) => env.name).join(', ')}
+                            </option>
+                          )
+                        })}
+                      </select>
+                      <p className="text-caption text-tertiary mt-1">
+                        Define onde os arquivos de trabalho deste projeto ficam armazenados.
+                      </p>
+                    </>
+                  ) : (
+                    <div className="text-caption text-tertiary flex items-center gap-2">
+                      <span>Ambiente de execução:</span>
+                      <span className="badge badge-neutral">
+                        {envOptions.groups[0].environments.map((env) => env.name).join(', ')}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <div className="flex items-baseline justify-between gap-2">
+                  <label htmlFor="proj-repo-search" className="label">Repositórios de origem (GitHub)</label>
+                  <span className="text-caption text-tertiary">opcional</span>
+                </div>
+
+                {selectedRepoIds.length > 0 && (
+                  <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                    {selectedRepoIds.map((repoId) => {
+                      const repo = repoOptions?.repositories.find((r) => r.id === repoId)
+                      return (
+                        <span key={repoId} className="badge badge-info flex items-center gap-1">
+                          <GitBranch size={12} />
+                          <span>{repo?.fullName ?? repoId}</span>
+                          {repo?.private && <Lock size={11} aria-label="Privado" />}
+                          <button
+                            type="button"
+                            onClick={() => toggleRepo(repoId)}
+                            aria-label={`Remover repositório ${repo?.fullName ?? repoId}`}
+                            style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 0, display: 'inline-flex' }}
+                          >
+                            <X size={12} />
+                          </button>
+                        </span>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {loadingOptions ? (
+                  <p className="text-caption text-tertiary">Carregando repositórios conectados...</p>
+                ) : repoOptions && repoOptions.repositories.length > 0 ? (
+                  <div className="stack-xs">
+                    <div className="relative flex items-center">
+                      <Search size={14} style={{ position: 'absolute', left: '10px', opacity: 0.6, pointerEvents: 'none' }} />
+                      <input
+                        id="proj-repo-search"
+                        type="text"
+                        className="input-base"
+                        style={{ paddingLeft: '32px' }}
+                        value={repoSearch}
+                        onChange={(e) => setRepoSearch(e.target.value)}
+                        placeholder={`Buscar entre ${repoOptions.repositories.length} repositórios do GitHub...`}
+                        disabled={savingProject}
+                      />
+                    </div>
+                    <div
+                      role="listbox"
+                      aria-label="Repositórios GitHub disponíveis"
+                      aria-multiselectable="true"
+                      style={{
+                        maxHeight: '150px',
+                        overflowY: 'auto',
+                        border: '1px solid var(--color-border-default)',
+                        borderRadius: '8px',
+                        backgroundColor: 'var(--color-bg-surface)',
+                      }}
+                    >
+                      {filteredRepos.length === 0 ? (
+                        <div className="p-2 text-caption text-tertiary">Nenhum repositório encontrado para "{repoSearch}".</div>
+                      ) : (
+                        filteredRepos.map((repo) => {
+                          const isSelected = selectedRepoIds.includes(repo.id)
+                          return (
+                            <button
+                              key={repo.id}
+                              type="button"
+                              role="option"
+                              aria-selected={isSelected}
+                              onClick={() => toggleRepo(repo.id)}
+                              disabled={savingProject}
+                              style={{
+                                width: '100%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '8px',
+                                padding: '7px 10px',
+                                textAlign: 'left',
+                                backgroundColor: isSelected ? 'rgba(99, 102, 241, 0.14)' : 'transparent',
+                                border: 'none',
+                                borderBottom: '1px solid var(--color-border-subtle)',
+                                color: 'inherit',
+                                cursor: 'pointer',
+                                fontSize: '13px',
+                              }}
+                            >
+                              <span className="flex items-center gap-2 min-w-0">
+                                <GitBranch size={13} style={{ flexShrink: 0, opacity: 0.7 }} />
+                                <span className="text-truncate">{repo.fullName}</span>
+                                {repo.private && <Lock size={12} style={{ flexShrink: 0, opacity: 0.7 }} aria-label="Repositório privado" />}
+                              </span>
+                              <span className="flex items-center gap-2 flex-shrink-0 text-caption text-tertiary">
+                                {repo.connections.join(' · ')}
+                                {isSelected && <Check size={14} style={{ color: 'var(--color-brand-primary)' }} />}
+                              </span>
+                            </button>
+                          )
+                        })
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-caption text-tertiary">
+                    Nenhum repositório GitHub conectado disponível no momento.
+                  </p>
+                )}
+              </div>
+
+              {!editProject && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label htmlFor="proj-cwd" className="label">Pasta local (opcional)</label>
+                    <input
+                      id="proj-cwd"
+                      className="input-base text-mono"
+                      value={projCwd}
+                      onChange={(e) => setProjCwd(e.target.value)}
+                      placeholder="/home/jhonata/meu-projeto"
+                      disabled={savingProject}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="proj-repo-url" className="label">URL Git manual (opcional)</label>
+                    <input
+                      id="proj-repo-url"
+                      type="url"
+                      className="input-base text-mono"
+                      value={projRepoUrl}
+                      onChange={(e) => setProjRepoUrl(e.target.value)}
+                      placeholder="https://github.com/org/repo"
+                      disabled={savingProject}
+                    />
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label htmlFor="proj-desc" className="label">Descrição</label>
-                <textarea id="proj-desc" className="input-base" rows={3} value={projDesc} onChange={(e) => setProjDesc(e.target.value)} />
+                <textarea id="proj-desc" className="input-base" rows={2} value={projDesc} onChange={(e) => setProjDesc(e.target.value)} disabled={savingProject} />
               </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label htmlFor="proj-status" className="label">Status</label>
-                  <select id="proj-status" className="input-base" value={projStatus} onChange={(e) => setProjStatus(e.target.value)}>
+                  <select id="proj-status" className="input-base" value={projStatus} onChange={(e) => setProjStatus(e.target.value)} disabled={savingProject}>
                     <option value="planned">Planejado</option>
                     <option value="in_progress">Em Andamento</option>
                     <option value="completed">Concluído</option>
@@ -371,23 +776,45 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="proj-lead" className="label">Líder</label>
-                  <select id="proj-lead" className="input-base" value={projLead} onChange={(e) => setProjLead(e.target.value)}>
+                  <label htmlFor="proj-visibility" className="label">Visibilidade</label>
+                  <select id="proj-visibility" className="input-base" value={projVisibility} onChange={(e) => setProjVisibility(e.target.value as 'open' | 'private')} disabled={savingProject}>
+                    <option value="open">Aberto (toda empresa)</option>
+                    <option value="private">Privado (somente membros)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="proj-lead" className="label">Líder (opcional)</label>
+                  <select id="proj-lead" className="input-base" value={projLead} onChange={(e) => setProjLead(e.target.value)} disabled={savingProject}>
                     <option value="">Nenhum</option>
                     {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
                 </div>
+                <div>
+                  <label htmlFor="proj-target-date" className="label">Prazo alvo (opcional)</label>
+                  <input
+                    id="proj-target-date"
+                    type="date"
+                    className="input-base"
+                    value={projTargetDate}
+                    onChange={(e) => setProjTargetDate(e.target.value)}
+                    disabled={savingProject}
+                  />
+                </div>
               </div>
+
               <div>
                 <label htmlFor="proj-goal" className="label">Meta vinculada</label>
-                <select id="proj-goal" className="input-base" value={projGoal} onChange={(e) => setProjGoal(e.target.value)}>
+                <select id="proj-goal" className="input-base" value={projGoal} onChange={(e) => setProjGoal(e.target.value)} disabled={savingProject}>
                   <option value="">Nenhuma</option>
                   {goals.map((g) => <option key={g.id} value={g.id}>{g.title}</option>)}
                 </select>
               </div>
               <div className="modal__footer" style={{ padding: '12px 0 0 0' }}>
-                <button type="button" className="btn btn-ghost" onClick={() => setShowProjModal(false)}>Cancelar</button>
-                <button type="submit" className="btn btn-primary">Salvar</button>
+                <button type="button" className="btn btn-ghost" onClick={() => setShowProjModal(false)} disabled={savingProject}>Cancelar</button>
+                <button type="submit" className="btn btn-primary" disabled={savingProject}>{savingProject ? 'Salvando...' : 'Salvar'}</button>
               </div>
             </form>
           </div>

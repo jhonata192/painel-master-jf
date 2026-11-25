@@ -30,7 +30,10 @@ import type {
   IssueLabel,
   Message,
   OrgNode,
+  CreateProjectPayload,
   Project,
+  ProjectEnvironmentOptions,
+  ProjectRepositoryOptions,
   ProjectWorkspace,
   Routine,
   RoutineRun,
@@ -840,7 +843,15 @@ class ApiClient {
     return this.request<Project[]>(`/companies/${companyId}/projects${qs}`)
   }
 
-  async createProject(companyId: string, data: Partial<Project>): Promise<Project> {
+  async listProjectEnvironments(companyId: string): Promise<ProjectEnvironmentOptions> {
+    return this.request<ProjectEnvironmentOptions>(`/companies/${companyId}/project-environments`)
+  }
+
+  async listProjectRepositories(companyId: string): Promise<ProjectRepositoryOptions> {
+    return this.request<ProjectRepositoryOptions>(`/companies/${companyId}/project-repositories`)
+  }
+
+  async createProject(companyId: string, data: CreateProjectPayload): Promise<Project> {
     return this.request<Project>(`/companies/${companyId}/projects`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -852,6 +863,14 @@ class ApiClient {
     return this.request<Project>(`/projects/${encodeURIComponent(projectId)}${qs}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
+    })
+  }
+
+  async setProjectRepositories(projectId: string, repositoryIds: string[], companyId?: string): Promise<Project> {
+    const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : ''
+    return this.request<Project>(`/projects/${encodeURIComponent(projectId)}/repositories${qs}`, {
+      method: 'PUT',
+      body: JSON.stringify({ repositoryIds }),
     })
   }
 

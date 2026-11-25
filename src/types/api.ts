@@ -270,14 +270,65 @@ export interface Project {
   id: string
   companyId: string
   goalId?: string | null
+  goalIds?: string[]
   name: string
   description?: string | null
+  visibility?: 'open' | 'private'
   status: string
   leadAgentId?: string | null
   targetDate?: string | null
   color?: string | null
+  workspaces?: ProjectWorkspace[]
+  primaryWorkspace?: ProjectWorkspace | null
   createdAt: string
   updatedAt: string
+}
+
+export interface ProjectRepository {
+  id: string
+  fullName: string
+  ownerType?: 'personal' | 'organization'
+  url: string
+  private?: boolean
+  connections: string[]
+  connectionIds?: string[]
+}
+
+export interface ProjectRepositoryOptions {
+  connections?: Array<{ id: string; name: string }>
+  repositories: ProjectRepository[]
+  connectionCount: number
+  failedConnectionCount: number
+}
+
+export interface ProjectEnvironmentOptions {
+  groups: Array<{
+    storageProviderPluginId: string | null
+    environments: Array<{ id: string; name: string }>
+  }>
+  defaultEnvironmentId: string | null
+  error: string | null
+}
+
+export interface CreateProjectPayload {
+  name: string
+  description?: string | null
+  status?: string
+  visibility?: 'open' | 'private'
+  leadAgentId?: string | null
+  goalId?: string | null
+  goalIds?: string[]
+  targetDate?: string | null
+  color?: string | null
+  environmentId?: string
+  expectedStorageProviderPluginId?: string | null
+  repositoryIds?: string[]
+  repositoryUrls?: string[]
+  workspace?: {
+    name: string
+    cwd?: string
+    repoUrl?: string
+  }
 }
 
 export interface ProjectWorkspace {

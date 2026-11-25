@@ -8,19 +8,32 @@ describe('ProjectsView', () => {
     vi.restoreAllMocks()
   })
 
-  it('loads projects and goals only once on mount without infinite refetch loop and creates a project', async () => {
+  it('loads projects and goals only once on mount and creates a project with Paperclip options (env, repos, color, visibility)', async () => {
     let projectsCalls = 0
     let goalsCalls = 0
     let createCalls = 0
+    let lastCreatePayload: Record<string, unknown> | null = null
 
     const createdProject = {
       id: 'proj-1',
+      companyId: 'comp-1',
       name: 'Projeto Teste',
       description: 'Descrição teste',
       status: 'planned',
+      visibility: 'private',
+      color: '#22c55e',
       leadAgentId: null,
       goalId: null,
-      workspaces: [],
+      workspaces: [
+        {
+          id: 'ws-1',
+          projectId: 'proj-1',
+          name: 'jhonata192/painel-master-jf',
+          repoUrl: 'https://github.com/jhonata192/painel-master-jf',
+        },
+      ],
+      createdAt: '2026-11-25T12:00:00Z',
+      updatedAt: '2026-11-25T12:00:00Z',
     }
 
     vi.stubGlobal(
@@ -42,8 +55,51 @@ describe('ProjectsView', () => {
             json: async () => [],
           })
         }
+        if (url.endsWith('/project-environments')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              groups: [
+                {
+                  storageProviderPluginId: null,
+                  environments: [{ id: 'env-local', name: 'Local' }],
+                },
+              ],
+              defaultEnvironmentId: 'env-local',
+              error: null,
+            }),
+          })
+        }
+        if (url.endsWith('/project-repositories')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              repositories: [
+                {
+                  id: '1470559908',
+                  fullName: 'jhonata192/painel-master-jf',
+                  url: 'https://github.com/jhonata192/painel-master-jf',
+                  private: false,
+                  connections: ['GitHub'],
+                },
+                {
+                  id: '1436265128',
+                  fullName: 'jhonata192/jarvis-ai',
+                  url: 'https://github.com/jhonata192/jarvis-ai',
+                  private: true,
+                  connections: ['GitHub'],
+                },
+              ],
+              connectionCount: 1,
+              failedConnectionCount: 0,
+            }),
+          })
+        }
         if (url.endsWith('/projects') && init?.method === 'POST') {
           createCalls += 1
+          lastCreatePayload = JSON.parse(String(init.body || '{}'))
           return Promise.resolve({
             ok: true,
             status: 201,
@@ -64,19 +120,33 @@ describe('ProjectsView', () => {
       expect(screen.getByText('Nenhum projeto cadastrado')).toBeInTheDocument()
     })
 
-    // Give React an extra tick to ensure no loop is triggered after initial load
     await new Promise((r) => setTimeout(r, 50))
     expect(projectsCalls).toBe(1)
     expect(goalsCalls).toBe(1)
     expect(screen.queryByText('Erro ao carregar dados')).not.toBeInTheDocument()
 
-    // Open "Novo Projeto" modal and create a project
+    // Open "Novo Projeto" modal
     fireEvent.click(screen.getByRole('button', { name: /Novo Projeto/i }))
     expect(screen.getByRole('dialog')).toBeInTheDocument()
-    expect(screen.queryByText('Erro ao carregar dados')).not.toBeInTheDocument()
 
+    await waitFor(() => {
+      expect(screen.getByText('Local')).toBeInTheDocument()
+      expect(screen.getByText('jhonata192/painel-master-jf')).toBeInTheDocument()
+    })
+
+    // Filter and select GitHub repo
+    fireEvent.change(screen.getByPlaceholderText(/Buscar entre 2 repositórios/i), {
+      target: { value: 'painel' },
+    })
+    expect(screen.queryByText('jhonata192/jarvis-ai')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: /jhonata192\/painel-master-jf/i }))
+
+    // Fill name, description, visibility, color
     fireEvent.change(screen.getByLabelText(/Nome \*/i), { target: { value: 'Projeto Teste' } })
     fireEvent.change(screen.getByLabelText(/Descrição/i), { target: { value: 'Descrição teste' } })
+    fireEvent.change(screen.getByLabelText(/Visibilidade/i), { target: { value: 'private' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Selecionar cor #22c55e' }))
+
     fireEvent.click(screen.getByRole('button', { name: 'Salvar' }))
 
     await waitFor(() => {
@@ -85,6 +155,16 @@ describe('ProjectsView', () => {
       expect(screen.getByText('Projeto Teste')).toBeInTheDocument()
     })
 
+    expect(lastCreatePayload).toMatchObject({
+      name: 'Projeto Teste',
+      description: 'Descrição teste',
+      status: 'planned',
+      visibility: 'private',
+      color: '#22c55e',
+      environmentId: 'env-local',
+      expectedStorageProviderPluginId: null,
+      repositoryIds: ['1470559908'],
+    })
     expect(projectsCalls).toBe(2)
     expect(goalsCalls).toBe(2)
   })
