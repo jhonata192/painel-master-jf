@@ -175,26 +175,35 @@ export function ChatView({ agent, companyId, agents = [], onSelectAgent, onNewMe
     scrollToBottom()
   }, [messages.length, scrollToBottom])
 
+  const prevLiveRunIdRef = useRef<string | null>(null)
+
+  const pollLive = useCallback(() => {
+    api
+      .listLiveRuns(companyId)
+      .then((runs) => {
+        const match = runs.find(
+          (r) => r.agentId === agent.id && (r.status === 'running' || r.status === 'queued')
+        )
+        const nextRun = match ?? null
+        setLiveRun(nextRun)
+        if (prevLiveRunIdRef.current && !nextRun) {
+          refreshSession()
+          refetchChats()
+        }
+        prevLiveRunIdRef.current = nextRun?.id ?? null
+      })
+      .catch(() => {})
+  }, [companyId, agent.id, refreshSession, refetchChats])
+
   // Monitorar execuções ao vivo deste agente
   useEffect(() => {
-    let active = true
-    const pollLive = () => {
-      api
-        .listLiveRuns(companyId)
-        .then((runs) => {
-          if (!active) return
-          const match = runs.find((r) => r.agentId === agent.id && (r.status === 'running' || r.status === 'queued'))
-          setLiveRun(match ?? null)
-        })
-        .catch(() => {})
-    }
+    prevLiveRunIdRef.current = null
     pollLive()
-    const timer = setInterval(pollLive, 5000)
+    const timer = setInterval(pollLive, 4000)
     return () => {
-      active = false
       clearInterval(timer)
     }
-  }, [companyId, agent.id])
+  }, [pollLive])
 
   // Auto-refresh do log ao vivo quando o modal estiver aberto
   useEffect(() => {
@@ -231,6 +240,8 @@ export function ChatView({ agent, companyId, agents = [], onSelectAgent, onNewMe
 
     try {
       await sendMessage(content)
+      setTimeout(pollLive, 400)
+      setTimeout(pollLive, 1500)
     } catch (err) {
       console.error('Failed to send message:', err)
     }
@@ -647,6 +658,45 @@ export function ChatView({ agent, companyId, agents = [], onSelectAgent, onNewMe
             isSending={message.id.startsWith('temp-')}
           />
         ))}
+
+        {liveRun && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex items-start gap-3 p-3"
+            style={{
+              backgroundColor: 'rgba(124, 77, 255, 0.08)',
+              border: '1px solid rgba(124, 77, 255, 0.35)',
+              borderRadius: 'var(--radius-md)',
+            }}
+          >
+            <Loader2
+              size={16}
+              className="animate-spin"
+              style={{ color: 'var(--color-brand-primary)', marginTop: '2px', flexShrink: 0 }}
+              aria-hidden="true"
+            />
+            <div className="flex-1 min-w-0">
+              <div className="text-body-sm" style={{ fontWeight: 600 }}>
+                {agent.name}{' '}
+                {liveRun.status === 'queued'
+                  ? 'está na fila para iniciar...'
+                  : 'está analisando e executando sua solicitação agora...'}
+              </div>
+              <div className="text-caption text-tertiary mt-1">
+                A resposta aparecerá aqui automaticamente ao concluir.
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm flex-shrink-0"
+              onClick={() => setShowLiveLog(true)}
+            >
+              <Terminal size={13} aria-hidden="true" />
+              Acompanhar execução
+            </button>
+          </div>
+        )}
 
         <div ref={messagesEndRef} />
       </div>

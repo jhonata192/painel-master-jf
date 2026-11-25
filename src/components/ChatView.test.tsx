@@ -99,4 +99,50 @@ describe('ChatView', () => {
       )
     })
   })
+
+  it('shows inline execution status bubble when the agent has an active live run', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/chats/larissa')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              id: 'chat-issue-1',
+              title: 'Chat with Larissa',
+              assigneeAgentId: 'agent-1',
+              createdAt: '2026-11-25T10:00:00Z',
+              updatedAt: '2026-11-25T10:00:00Z',
+            }),
+          })
+        }
+        if (url.includes('/live-runs')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => [
+              {
+                id: 'run-live-1',
+                agentId: 'agent-1',
+                status: 'running',
+                invocationSource: 'on_demand',
+                startedAt: '2026-11-25T10:00:00Z',
+              },
+            ],
+          })
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => [] })
+      })
+    )
+
+    render(<ChatView agent={mockAgent} companyId="c-1" />)
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Larissa está analisando e executando sua solicitação agora/i)
+      ).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Acompanhar execução/i })).toBeInTheDocument()
+    })
+  })
 })

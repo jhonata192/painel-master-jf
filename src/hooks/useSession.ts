@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '../lib/api'
 import type { SessionData, Agent, Company, SidebarBadges } from '../types/api'
 
@@ -82,23 +82,29 @@ export function useAgents(companyId: string | undefined) {
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<Error | null>(null)
+  const hasLoadedRef = useRef(false)
 
   const fetchAgents = useCallback(async () => {
     if (!companyId) return
+    const isInitial = !hasLoadedRef.current
     try {
-      setLoading(true)
+      if (isInitial) setLoading(true)
       const data = await api.getAgents(companyId)
       setAgents(data)
       setError(null)
+      hasLoadedRef.current = true
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Erro ao carregar agentes'))
     } finally {
-      setLoading(false)
+      if (isInitial) setLoading(false)
     }
   }, [companyId])
 
   useEffect(() => {
+    hasLoadedRef.current = false
     fetchAgents()
+    const timer = setInterval(fetchAgents, 8000)
+    return () => clearInterval(timer)
   }, [fetchAgents])
 
   return { agents, loading, error, refetch: fetchAgents }

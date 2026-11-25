@@ -139,8 +139,12 @@ function AppContent() {
         { id: message.id, message: `Nova mensagem em conversa com ${activeAgent?.name || 'agente'}`, read: false },
         ...prev.slice(0, 9),
       ])
+      refetchAgents()
+      setTimeout(() => {
+        refetchAgents()
+      }, 1000)
     },
-    [activeAgent]
+    [activeAgent, refetchAgents]
   )
 
   // Atalho Ctrl+K para busca global
