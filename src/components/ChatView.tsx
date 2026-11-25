@@ -1,7 +1,18 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Plus, RotateCcw, Loader2, AlertCircle, ChevronDown, ChevronUp, MessageSquare } from 'lucide-react'
+import {
+  Send,
+  Plus,
+  RotateCcw,
+  Loader2,
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  MessageSquare,
+  Zap,
+} from 'lucide-react'
 import { cn, formatTime, getInitials, getAgentColor } from '../lib/utils'
-import { useChat } from '../hooks/useChat'
+import { api } from '../lib/api'
+import { useChat, useChats } from '../hooks/useChat'
 import type { Agent, Message } from '../types/api'
 
 interface ChatViewProps {
@@ -15,6 +26,8 @@ export function ChatView({ agent, companyId, onNewMessage }: ChatViewProps) {
   const [showSubjectHistory, setShowSubjectHistory] = useState(false)
   const [newSubjectInput, setNewSubjectInput] = useState('')
   const [showNewSubjectInput, setShowNewSubjectInput] = useState(false)
+  const [waking, setWaking] = useState(false)
+  const [wakeNotice, setWakeNotice] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -26,6 +39,7 @@ export function ChatView({ agent, companyId, onNewMessage }: ChatViewProps) {
     error,
     subject: currentSubject,
     fetchSession,
+    selectSessionById,
     createNewSession,
     sendMessage,
     refreshSession,
@@ -35,19 +49,29 @@ export function ChatView({ agent, companyId, onNewMessage }: ChatViewProps) {
     onNewMessage,
   })
 
+  const { chats, refetch: refetchChats } = useChats({
+    companyId,
+    agentRef: agent.ref,
+  })
+
   useEffect(() => {
     if (currentSubject) {
       setSubject(currentSubject)
+    } else {
+      setSubject('')
     }
   }, [currentSubject])
 
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = messagesEndRef.current
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [])
 
   useEffect(() => {
     scrollToBottom()
-  }, [messages, scrollToBottom])
+  }, [messages.length, scrollToBottom])
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -86,267 +110,261 @@ export function ChatView({ agent, companyId, onNewMessage }: ChatViewProps) {
       await createNewSession(subjectText)
       setShowNewSubjectInput(false)
       setNewSubjectInput('')
+      refetchChats()
     } catch (err) {
       console.error('Failed to create new subject:', err)
     }
   }
 
-  const handleSubjectSelect = async (chatSubject: string) => {
+  const handleSelectExistingChat = async (issueId: string) => {
     try {
-      await createNewSession(chatSubject)
+      await selectSessionById(issueId)
       setShowSubjectHistory(false)
     } catch (err) {
-      console.error('Failed to switch subject:', err)
+      console.error('Failed to switch session:', err)
     }
   }
 
-  if (loading && !session && messages.length === 0) {
-    return (
-      <div className="chat-view flex flex-col h-full">
-        <div className="chat-view__header p-4 border-b border-[var(--color-border-subtle)]">
-          <div className="flex items-center gap-3">
-            <div
-              className="avatar avatar-md"
-              style={{ backgroundColor: getAgentColor(agent.ref) }}
-            >
-              {agent.avatar ? (
-                <img src={agent.avatar} alt="" />
-              ) : (
-                getInitials(agent.name)
-              )}
-            </div>
-            <div className="flex-1 min-w-0">
-              <h2 className="text-h3 font-semibold text-[var(--color-text-primary)] text-truncate">
-                {agent.name}
-              </h2>
-              <p className="text-[var(--text-caption)] text-[var(--color-text-tertiary)] text-truncate">
-                {agent.role}
-              </p>
-            </div>
-          </div>
-        </div>
-        <div className="flex-1 flex items-center justify-center" aria-busy="true" aria-label="Carregando conversa">
-          <div className="skeleton h-8 w-48 rounded-md" data-testid="chat-loading-skeleton" aria-hidden="true" />
-          <div className="skeleton h-4 w-64 rounded-md mt-2" />
-          <div className="skeleton h-4 w-48 rounded-md mt-2" />
-        </div>
-      </div>
-    )
+  const handleWakeup = async () => {
+    try {
+      setWaking(true)
+      await api.wakeupAgent(agent.id, `Wakeup via Chat (${subject || 'conversa'})`)
+      setWakeNotice(`Sinal de despertar enviado para ${agent.name}`)
+      setTimeout(() => setWakeNotice(null), 4000)
+    } catch (err) {
+      setWakeNotice(err instanceof Error ? err.message : 'Falha ao acordar agente')
+    } finally {
+      setWaking(false)
+    }
   }
 
-  if (!session && messages.length === 0) {
-    return (
-      <div className="chat-view flex flex-col h-full">
-        <div className="chat-view__header p-4 border-b border-[var(--color-border-subtle)]">
-          <div className="flex items-center gap-3">
-            <div
-              className="avatar avatar-md"
-              style={{ backgroundColor: getAgentColor(agent.ref) }}
-            >
-              {agent.avatar ? (
-                <img src={agent.avatar} alt="" />
-              ) : (
-                getInitials(agent.name)
-              )}
-            </div>
-            <div className="flex-1 min-w-0">
-              <h2 className="text-h3 font-semibold text-[var(--color-text-primary)] text-truncate">
-                {agent.name}
-              </h2>
-              <p className="text-[var(--text-caption)] text-[var(--color-text-tertiary)] text-truncate">
-                {agent.role}
-              </p>
-            </div>
-            <button
-              className="btn btn-primary"
-              onClick={() => createNewSession()}
-              disabled={sending}
-            >
-              <Plus size={18} className="mr-2" />
-              Nova Conversa
-            </button>
+  const headerBlock = (
+    <div className="chat-view__header">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
+          <div
+            className="avatar avatar-md"
+            style={{ backgroundColor: getAgentColor(agent.ref) }}
+            aria-hidden="true"
+          >
+            {agent.avatar ? <img src={agent.avatar} alt="" /> : getInitials(agent.name)}
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-h3 text-primary text-truncate" style={{ fontSize: '1.05rem' }}>
+              {agent.name}
+            </h2>
+            <p className="text-caption text-tertiary text-truncate">
+              {agent.role}
+              {subject ? ` • ${subject}` : ''}
+            </p>
           </div>
         </div>
-        <div className="flex-1 flex items-center justify-center p-8">
-          <div className="empty-state">
-            <MessageSquare className="empty-state__icon" size={64} />
-            <h3 className="empty-state__title">Nenhuma conversa iniciada</h3>
-            <p className="empty-state__description">
-              Clique em "Nova Conversa" para começar a falar com {agent.name}
-            </p>
-            <div className="empty-state__action">
-              <button
-                className="btn btn-primary"
-                onClick={() => createNewSession()}
-              >
-                <Plus size={18} className="mr-2" />
-                Iniciar Conversa
-              </button>
-            </div>
-          </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={handleWakeup}
+            disabled={waking}
+            title="Acordar agente (Wakeup)"
+            aria-label={`Acordar ${agent.name}`}
+          >
+            {waking ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Zap size={14} aria-hidden="true" />}
+            Acordar
+          </button>
+
+          {chats.length > 0 && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setShowSubjectHistory(!showSubjectHistory)}
+              aria-expanded={showSubjectHistory}
+              aria-label="Histórico de conversas"
+            >
+              Histórico ({chats.length})
+              {showSubjectHistory ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => setShowNewSubjectInput(!showNewSubjectInput)}
+            aria-expanded={showNewSubjectInput}
+          >
+            <Plus size={14} aria-hidden="true" />
+            Nova Conversa
+          </button>
+
+          {session && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon"
+              onClick={refreshSession}
+              aria-label="Atualizar conversa"
+              title="Atualizar mensagens"
+            >
+              <RotateCcw size={16} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {wakeNotice && (
+        <div
+          className="badge badge-info mt-2"
+          role="status"
+          aria-live="polite"
+        >
+          {wakeNotice}
+        </div>
+      )}
+
+      {showNewSubjectInput && (
+        <div className="flex items-center gap-2 mt-3">
+          <input
+            type="text"
+            className="input-base flex-1"
+            style={{ minHeight: '38px', padding: '6px 12px', fontSize: '0.875rem' }}
+            placeholder="Assunto da conversa (opcional — deixe em branco para chat principal)"
+            value={newSubjectInput}
+            onChange={(e) => setNewSubjectInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                handleNewSubject()
+              }
+            }}
+            aria-label="Assunto da nova conversa"
+          />
+          <button type="button" className="btn btn-primary btn-sm" onClick={handleNewSubject}>
+            Iniciar
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => setShowNewSubjectInput(false)}
+          >
+            Cancelar
+          </button>
+        </div>
+      )}
+
+      {showSubjectHistory && chats.length > 0 && (
+        <div
+          className="mt-3 p-2"
+          style={{
+            backgroundColor: 'var(--color-bg-surface-elevated)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--color-border-subtle)',
+            maxHeight: '180px',
+            overflowY: 'auto',
+          }}
+          role="region"
+          aria-label="Conversas anteriores"
+        >
+          <ul style={{ listStyle: 'none' }} className="stack-xs">
+            {chats.map((c) => (
+              <li key={c.id}>
+                <button
+                  type="button"
+                  className={cn(
+                    'dropdown-item',
+                    session?.id === c.id && 'badge-brand'
+                  )}
+                  onClick={() => handleSelectExistingChat(c.id)}
+                >
+                  <MessageSquare size={14} aria-hidden="true" />
+                  <span className="text-truncate flex-1">{c.subject}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+
+  if (loading && !session && messages.length === 0) {
+    return (
+      <div className="chat-view">
+        {headerBlock}
+        <div
+          className="flex-1 flex flex-col items-center justify-center p-4"
+          aria-busy="true"
+          aria-label="Carregando conversa"
+        >
+          <div
+            className="skeleton"
+            style={{ height: '32px', width: '192px' }}
+            data-testid="chat-loading-skeleton"
+            aria-hidden="true"
+          />
+          <div
+            className="skeleton mt-2"
+            style={{ height: '16px', width: '256px' }}
+            aria-hidden="true"
+          />
+          <div
+            className="skeleton mt-2"
+            style={{ height: '16px', width: '192px' }}
+            aria-hidden="true"
+          />
         </div>
       </div>
     )
   }
 
   return (
-    <div className="chat-view flex flex-col h-full">
-      <div className="chat-view__header p-4 border-b border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
-        <div className="flex items-center gap-3">
-          <div
-            className="avatar avatar-md flex-shrink-0"
-            style={{ backgroundColor: getAgentColor(agent.ref) }}
-          >
-            {agent.avatar ? (
-              <img src={agent.avatar} alt="" />
-            ) : (
-              getInitials(agent.name)
-            )}
-          </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="text-h3 font-semibold text-[var(--color-text-primary)] text-truncate">
-              {agent.name}
-            </h2>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="badge badge-brand text-[var(--text-caption)]">
-                {agent.role}
-              </span>
-              {subject && (
-                <button
-                  className="btn btn-ghost btn-sm flex items-center gap-1 px-2 py-1"
-                  onClick={() => setShowSubjectHistory(!showSubjectHistory)}
-                  aria-expanded={showSubjectHistory}
-                  aria-label={showSubjectHistory ? 'Ocultar histórico de assuntos' : 'Ver histórico de assuntos'}
-                >
-                  <span className="text-truncate max-w-[200px]">{subject}</span>
-                  {showSubjectHistory ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              className="btn btn-ghost btn-icon"
-              onClick={() => setShowNewSubjectInput(true)}
-              aria-label="Novo assunto"
-              title="Novo assunto"
-            >
-              <Plus size={20} />
-            </button>
-            <button
-              className="btn btn-ghost btn-icon"
-              onClick={refreshSession}
-              disabled={loading}
-              aria-label="Atualizar conversa"
-              title="Atualizar"
-            >
-              <RotateCcw size={20} className={loading ? 'animate-spin' : ''} />
-            </button>
-          </div>
-        </div>
+    <div className="chat-view">
+      {headerBlock}
 
-        {showSubjectHistory && (
-          <div className="mt-3 p-3 bg-[var(--color-bg-surface-elevated)] rounded-lg border border-[var(--color-border-subtle)]">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-body-sm font-medium text-[var(--color-text-primary)]">
-                Histórico de Assuntos
-              </h3>
-              <button
-                className="btn btn-ghost btn-icon btn-sm"
-                onClick={() => setShowSubjectHistory(false)}
-                aria-label="Fechar histórico"
-              >
-                <ChevronUp size={16} />
-              </button>
-            </div>
-            <div className="space-y-1 max-h-48 overflow-y-auto">
-              {session && (
-                <>
-                  <button
-                    className={cn(
-                      'w-full text-left p-2 rounded-md text-sm transition-colors',
-                      'hover:bg-[var(--color-bg-surface)]',
-                      subject === session.subject
-                        ? 'bg-[var(--color-brand-primary)]/10 text-[var(--color-brand-primary)] font-medium'
-                        : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
-                    )}
-                    onClick={() => handleSubjectSelect(session.subject)}
-                    aria-current={subject === session.subject ? 'true' : 'false'}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-truncate">{session.subject || 'Sem assunto'}</span>
-                      {subject === session.subject && (
-                        <span className="badge badge-brand badge-sm ml-2">Atual</span>
-                      )}
-                    </div>
-                    <div className="text-[var(--text-caption)] text-[var(--color-text-tertiary)] mt-1">
-                      {formatTime(session.updatedAt)} • {session.messageCount} mensagens
-                    </div>
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
-        {showNewSubjectInput && (
-          <div className="mt-3 p-3 bg-[var(--color-bg-surface-elevated)] rounded-lg border border-[var(--color-border-subtle)]">
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                className="input-base flex-1"
-                placeholder="Título do novo assunto (opcional)"
-                value={newSubjectInput}
-                onChange={(e) => setNewSubjectInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleNewSubject()}
-                autoFocus
-                aria-label="Título do novo assunto"
-              />
-              <button
-                className="btn btn-primary"
-                onClick={handleNewSubject}
-                disabled={sending}
-              >
-                Criar
-              </button>
-              <button
-                className="btn btn-ghost btn-icon"
-                onClick={() => {
-                  setShowNewSubjectInput(false)
-                  setNewSubjectInput('')
-                }}
-                aria-label="Cancelar"
-              >
-                <RotateCcw size={20} />
-              </button>
-            </div>
-            <p className="text-[var(--text-caption)] text-[var(--color-text-tertiary)] mt-1">
-              Inicia uma nova sessão limpa. O histórico do assunto anterior permanece salvo.
-            </p>
-          </div>
-        )}
-      </div>
-
-      <div className="chat-view__messages flex-1 overflow-y-auto p-4 space-y-4" role="log" aria-live="polite" aria-label="Mensagens">
+      <div
+        className="chat-view__messages"
+        role="log"
+        aria-live="polite"
+        aria-label="Mensagens"
+      >
         {error && (
           <div className="error-inline" role="alert">
-            <AlertCircle className="error-inline__icon" size={20} />
+            <AlertCircle size={18} className="error-inline__icon" aria-hidden="true" />
             <div>
-              <strong>Erro:</strong> {error.message}
-              <button
-                className="btn btn-ghost btn-sm mt-2"
-                onClick={fetchSession}
-              >
-                Tentar novamente
-              </button>
+              <strong>Erro na conversa:</strong> {error.message}
+              <div>
+                <button className="btn btn-ghost btn-sm mt-2" onClick={fetchSession}>
+                  Tentar novamente
+                </button>
+              </div>
             </div>
           </div>
         )}
 
-        {messages.length === 0 && session && (
-          <div className="empty-state flex-1 flex items-center justify-center">
-            <MessageSquare className="empty-state__icon" size={48} />
-            <div className="text-center">
+        {!session && !error && (
+          <div className="empty-state flex-1">
+            <MessageSquare className="empty-state__icon" size={48} aria-hidden="true" />
+            <div>
+              <h3 className="empty-state__title">Nenhuma conversa ativa com {agent.name}</h3>
+              <p className="empty-state__description">
+                Inicie o chat direto com {agent.name} para enviar instruções e acompanhar respostas.
+              </p>
+              <div className="empty-state__action">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => createNewSession()}
+                >
+                  <Plus size={16} aria-hidden="true" />
+                  Iniciar Conversa
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {session && messages.length === 0 && !error && (
+          <div className="empty-state flex-1">
+            <MessageSquare className="empty-state__icon" size={48} aria-hidden="true" />
+            <div>
               <h3 className="empty-state__title">Conversa iniciada</h3>
               <p className="empty-state__description">
                 Envie a primeira mensagem para {agent.name}
@@ -369,21 +387,25 @@ export function ChatView({ agent, companyId, onNewMessage }: ChatViewProps) {
       </div>
 
       <form
-        className="chat-view__input p-4 border-t border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]"
+        className="chat-view__input"
         onSubmit={handleSendMessage}
         aria-label={`Enviar mensagem para ${agent.name}`}
       >
         <div className="flex items-end gap-3">
           <textarea
             ref={textareaRef}
-            className="input-base flex-1 resize-none"
+            className="input-base flex-1"
             rows={1}
-            placeholder={`Mensagem para ${agent.name}...`}
+            placeholder={
+              session
+                ? `Mensagem para ${agent.name}... (Enter para enviar)`
+                : 'Clique em "Iniciar Conversa" ou "Nova Conversa" acima...'
+            }
             onKeyDown={handleKeyDown}
             onChange={handleTextareaInput}
             disabled={sending || !session}
             aria-label={`Mensagem para ${agent.name}`}
-            style={{ minHeight: '44px', maxHeight: '160px' }}
+            style={{ minHeight: '44px', maxHeight: '160px', resize: 'none' }}
           />
           <button
             type="submit"
@@ -401,11 +423,6 @@ export function ChatView({ agent, companyId, onNewMessage }: ChatViewProps) {
             )}
           </button>
         </div>
-        {!session && (
-          <p className="text-[var(--text-caption)] text-[var(--color-text-tertiary)] mt-2 text-center">
-            Clique em "Nova Conversa" no cabeçalho para iniciar
-          </p>
-        )}
       </form>
     </div>
   )
@@ -420,72 +437,49 @@ interface MessageBubbleProps {
 
 function MessageBubble({ message, agent, isOwn, isSending }: MessageBubbleProps) {
   return (
-    <div
-      className={cn(
-        'message-bubble flex gap-3 animate-fade-in',
-        isOwn && 'flex-row-reverse'
-      )}
-    >
+    <div className={cn('message-bubble', isOwn && 'message-bubble--own')}>
       {!isOwn && (
         <div
           className="avatar avatar-sm flex-shrink-0"
           style={{ backgroundColor: getAgentColor(agent.ref) }}
           aria-hidden="true"
         >
-          {agent.avatar ? (
-            <img src={agent.avatar} alt="" />
-          ) : (
-            getInitials(agent.name)
-          )}
+          {agent.avatar ? <img src={agent.avatar} alt="" /> : getInitials(agent.name)}
         </div>
       )}
       <div
-        className={cn(
-          'message-bubble__content max-w-[70%]',
-          isOwn ? 'text-right' : 'text-left'
-        )}
+        className="message-bubble__content"
+        style={{ textAlign: isOwn ? 'right' : 'left' }}
       >
         {!isOwn && (
-          <div className="message-bubble__sender text-[var(--text-caption)] font-medium text-[var(--color-text-secondary)] mb-1 ml-1">
+          <div className="text-caption text-secondary mb-1" style={{ fontWeight: 500 }}>
             {agent.name}
           </div>
         )}
         <div
           className={cn(
-            'message-bubble__text inline-block p-3 rounded-2xl',
-            isOwn
-              ? 'bg-[var(--color-brand-primary)] text-[var(--color-text-inverse)] rounded-tr-none'
-              : 'bg-[var(--color-bg-surface-elevated)] text-[var(--color-text-primary)] rounded-tl-none',
-            isSending && 'opacity-60'
+            'message-bubble__text',
+            isOwn ? 'message-bubble__text--own' : 'message-bubble__text--agent'
           )}
+          style={{ opacity: isSending ? 0.65 : 1 }}
         >
-          <p className="whitespace-pre-wrap break-words">{message.content}</p>
+          <p>{message.content}</p>
           {isSending && (
-            <div className="flex items-center justify-end gap-1 mt-1">
-              <Loader2 size={12} className="animate-spin text-[var(--color-text-tertiary)]" />
-              <span className="text-[var(--text-caption)] text-[var(--color-text-tertiary)]">
-                Enviando...
-              </span>
+            <div className="flex items-center justify-end gap-1 mt-1 text-caption text-tertiary">
+              <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+              <span>Enviando...</span>
             </div>
           )}
         </div>
-        <div className="message-bubble__meta flex items-center gap-2 mt-1">
-          <time
-            className="text-[var(--text-caption)] text-[var(--color-text-tertiary)]"
-            dateTime={message.timestamp}
-          >
+        <div
+          className="flex items-center gap-2 mt-1"
+          style={{ justifyContent: isOwn ? 'flex-end' : 'flex-start' }}
+        >
+          <time className="text-caption text-tertiary" dateTime={message.timestamp}>
             {formatTime(message.timestamp)}
           </time>
-          {message.clientRequestId && (
-            <span className="text-[var(--text-caption)] text-[var(--color-text-tertiary)] font-mono">
-              {message.clientRequestId.slice(0, 8)}...
-            </span>
-          )}
         </div>
       </div>
-      {isOwn && (
-        <div className="w-8 flex-shrink-0" aria-hidden="true" />
-      )}
     </div>
   )
 }

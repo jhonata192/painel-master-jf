@@ -1,9 +1,24 @@
-import { useState } from 'react'
-import { CheckCircle, XCircle, Clock, AlertCircle, Info, FileText, MessageSquare, ExternalLink, Loader2 } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import {
+  CheckCircle,
+  XCircle,
+  Clock,
+  AlertCircle,
+  Info,
+  FileText,
+  MessageSquare,
+  ExternalLink,
+  Loader2,
+  RotateCcw,
+  Plus,
+  Send,
+  Scale,
+} from 'lucide-react'
 import { cn, formatTimestamp, getInitials, getAgentColor } from '../lib/utils'
+import { api } from '../lib/api'
 import { useApprovals } from '../hooks/useChat'
 import { useToastHelpers } from '../context/ToastContext'
-import type { Approval, Agent } from '../types/api'
+import type { Approval, ApprovalComment, Agent, DecisionItem } from '../types/api'
 
 interface ApprovalViewProps {
   companyId: string
@@ -11,41 +26,63 @@ interface ApprovalViewProps {
   currentUserId?: string
 }
 
-type LucideIcon = React.ComponentType<{ size?: number | string; className?: string }>
+type FilterTab = 'all' | 'pending' | 'approved' | 'rejected' | 'decisions'
 
-type StatusConfig = {
-  label: string
-  icon: LucideIcon
-  color: string
-  bg: string
-  border: string
+const statusConfig: Record<string, { label: string; icon: typeof Clock; badge: string }> = {
+  pending: { label: 'Pendente', icon: Clock, badge: 'badge-warning' },
+  approved: { label: 'Aprovado', icon: CheckCircle, badge: 'badge-success' },
+  rejected: { label: 'Rejeitado', icon: XCircle, badge: 'badge-error' },
+  revision_requested: { label: 'Revisão Solicitada', icon: AlertCircle, badge: 'badge-info' },
+  cancelled: { label: 'Cancelado', icon: Info, badge: 'badge-neutral' },
 }
 
-const statusConfig: Record<string, StatusConfig> = {
-  pending: { label: 'Pendente', icon: Clock, color: 'var(--color-status-warning)', bg: 'rgba(255, 214, 0, 0.15)', border: 'var(--color-status-warning)' },
-  approved: { label: 'Aprovado', icon: CheckCircle, color: 'var(--color-status-success)', bg: 'rgba(0, 230, 118, 0.15)', border: 'var(--color-status-success)' },
-  rejected: { label: 'Rejeitado', icon: XCircle, color: 'var(--color-status-error)', bg: 'rgba(255, 82, 82, 0.15)', border: 'var(--color-status-error)' },
-  cancelled: { label: 'Cancelado', icon: Info, color: 'var(--color-status-neutral)', bg: 'rgba(158, 158, 158, 0.15)', border: 'var(--color-status-neutral)' },
-}
-
-type ApprovalStatus = keyof typeof statusConfig
-
-export function ApprovalView({ companyId, agents, currentUserId }: ApprovalViewProps) {
-  const { approvals, loading, error, refetch, createApproval, updateApproval } = useApprovals({ companyId })
+export function ApprovalView({ companyId, agents }: ApprovalViewProps) {
+  const { approvals, loading, error, refetch, createApproval, actApproval } = useApprovals({ companyId })
   const { success, error: showError } = useToastHelpers()
+
+  const [tab, setTab] = useState<FilterTab>('all')
+  const [decisions, setDecisions] = useState<DecisionItem[]>([])
+  const [loadingDecisions, setLoadingDecisions] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [selectedApproval, setSelectedApproval] = useState<Approval | null>(null)
   const [creating, setCreating] = useState(false)
-  const [updating, setUpdating] = useState<string | null>(null)
+  const [updatingId, setUpdatingId] = useState<string | null>(null)
 
-  const getRequester = (id: string) => agents.find((a) => a.id === id) ?? null
-  const getApprover = (id?: string) => (id ? agents.find((a) => a.id === id) ?? null : null)
+  const loadDecisions = useCallback(async () => {
+    setLoadingDecisions(true)
+    try {
+      setDecisions(await api.listDecisions(companyId))
+    } catch {
+      setDecisions([])
+    } finally {
+      setLoadingDecisions(false)
+    }
+  }, [companyId])
 
-  const handleCreateApproval = async (data: { title: string; description: string; approverAgentId: string }) => {
+  useEffect(() => {
+    loadDecisions()
+  }, [loadDecisions])
+
+  const getRequester = (approval: Approval) => {
+    const id = approval.requestedByAgentId || approval.requestedBy
+    return agents.find((a) => a.id === id) ?? null
+  }
+
+  const handleCreateApproval = async (data: {
+    title: string
+    description: string
+    type: string
+    requestedByAgentId?: string
+  }) => {
     try {
       setCreating(true)
-      await createApproval(data)
-      success('Aprovação criada', 'A solicitação foi enviada para aprovação')
+      await createApproval({
+        title: data.title,
+        description: data.description,
+        type: data.type,
+        approverAgentId: data.requestedByAgentId,
+      })
+      success('Aprovação criada', 'Solicitação registrada no Paperclip')
       setShowCreateModal(false)
     } catch (err) {
       showError('Erro ao criar aprovação', err instanceof Error ? err.message : 'Erro desconhecido')
@@ -54,124 +91,282 @@ export function ApprovalView({ companyId, agents, currentUserId }: ApprovalViewP
     }
   }
 
-  const handleUpdateApproval = async (approvalId: string, status: 'approved' | 'rejected', comment?: string) => {
+  const handleAct = async (
+    approvalId: string,
+    action: 'approve' | 'reject' | 'request_revision' | 'cancel' | 'resubmit',
+    note?: string
+  ) => {
     try {
-      setUpdating(approvalId)
-      await updateApproval(approvalId, { status, comment })
-      success(
-        status === 'approved' ? 'Aprovação concedida' : 'Aprovação rejeitada',
-        `A solicitação foi ${status === 'approved' ? 'aprovada' : 'rejeitada'} com sucesso`
-      )
-      setSelectedApproval(null)
+      setUpdatingId(approvalId)
+      const updated = await actApproval(approvalId, action, note)
+      const labels: Record<string, string> = {
+        approve: 'Aprovação concedida',
+        reject: 'Aprovação rejeitada',
+        request_revision: 'Revisão solicitada',
+        cancel: 'Aprovação cancelada',
+        resubmit: 'Aprovação reenviada',
+      }
+      success(labels[action], 'Estado atualizado no Paperclip')
+      if (selectedApproval?.id === approvalId) {
+        setSelectedApproval(updated)
+      }
     } catch (err) {
-      showError('Erro ao atualizar', err instanceof Error ? err.message : 'Erro desconhecido')
+      showError('Erro na ação', err instanceof Error ? err.message : 'Erro desconhecido')
     } finally {
-      setUpdating(null)
+      setUpdatingId(null)
     }
   }
 
-  const pendingApprovals = approvals.filter((a) => a.status === 'pending')
-  const myPendingApprovals = pendingApprovals.filter(
-    (a) => a.approverAgentId === currentUserId
-  )
-  const requestedApprovals = approvals.filter(
-    (a) => a.requestedBy === currentUserId
-  )
+  const handleDecide = async (decisionId: string, optionId: string) => {
+    try {
+      await api.decideDecision(decisionId, optionId)
+      success('Decisão registrada')
+      loadDecisions()
+    } catch (err) {
+      showError('Erro ao decidir', err instanceof Error ? err.message : 'Falha')
+    }
+  }
+
+  const handleDismissDecision = async (decisionId: string) => {
+    try {
+      await api.dismissDecision(decisionId, 'Dispensada via painel web')
+      success('Decisão dispensada')
+      loadDecisions()
+    } catch (err) {
+      showError('Erro ao dispensar', err instanceof Error ? err.message : 'Falha')
+    }
+  }
+
+  const pendingApprovals = approvals.filter((a) => a.status === 'pending' || a.status === 'revision_requested')
+  const approvedApprovals = approvals.filter((a) => a.status === 'approved')
+  const closedApprovals = approvals.filter((a) => a.status === 'rejected' || a.status === 'cancelled')
+
+  const visibleApprovals =
+    tab === 'pending'
+      ? pendingApprovals
+      : tab === 'approved'
+      ? approvedApprovals
+      : tab === 'rejected'
+      ? closedApprovals
+      : approvals
 
   if (loading && approvals.length === 0) {
     return (
-      <div className="approval-view flex flex-col h-full">
-        <div className="approval-view__header p-4 border-b border-[var(--color-border-subtle)]">
-          <h2 className="text-h3 font-semibold text-[var(--color-text-primary)]">Aprovações</h2>
+      <div className="view-shell">
+        <div className="view-header">
+          <h2 className="text-h3 text-primary">Aprovações & Decisões</h2>
         </div>
-        <div className="flex-1 flex items-center justify-center">
-          <div className="skeleton h-8 w-48 rounded-md" />
+        <div className="flex-1 flex items-center justify-center p-5" aria-busy="true">
+          <div className="skeleton" style={{ height: '32px', width: '200px' }} aria-hidden="true" />
         </div>
       </div>
     )
   }
 
   return (
-    <div className="approval-view flex flex-col h-full">
-      <div className="approval-view__header p-4 border-b border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-3">
-            <h2 className="text-h3 font-semibold text-[var(--color-text-primary)]">Aprovações</h2>
-            <span className="badge badge-warning">{pendingApprovals.length}</span>
-            <span className="badge badge-info">{myPendingApprovals.length}</span>
-          </div>
-          <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
-            <MessageSquare size={18} className="mr-2" />
+    <div className="view-shell">
+      <div className="view-header">
+        <div className="flex items-center gap-3">
+          <h2 className="text-h3 text-primary">Aprovações & Decisões</h2>
+          <span className="badge badge-warning">{pendingApprovals.length} pendentes</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            className="btn btn-ghost btn-icon"
+            onClick={() => {
+              refetch()
+              loadDecisions()
+            }}
+            aria-label="Atualizar aprovações"
+            title="Atualizar"
+          >
+            <RotateCcw size={18} />
+          </button>
+          <button className="btn btn-primary btn-sm" onClick={() => setShowCreateModal(true)}>
+            <Plus size={16} aria-hidden="true" />
             Nova Aprovação
           </button>
         </div>
       </div>
 
-      {error && (
-        <div className="error-inline m-4" role="alert">
-          <AlertCircle className="error-inline__icon" size={20} />
-          <div>
-            <strong>Erro ao carregar aprovações:</strong> {error.message}
-            <button className="btn btn-ghost btn-sm mt-2" onClick={refetch}>
-              Tentar novamente
+      <div style={{ padding: '12px 20px 0', backgroundColor: 'var(--color-bg-surface)' }}>
+        <div className="tab-list" role="tablist" aria-label="Filtros de aprovação" style={{ marginBottom: 0 }}>
+          {[
+            { id: 'all', label: `Todas (${approvals.length})` },
+            { id: 'pending', label: `Pendentes (${pendingApprovals.length})` },
+            { id: 'approved', label: `Aprovadas (${approvedApprovals.length})` },
+            { id: 'rejected', label: `Rejeitadas / Canceladas (${closedApprovals.length})` },
+            { id: 'decisions', label: `Decisões (${decisions.length})` },
+          ].map((item) => (
+            <button
+              key={item.id}
+              role="tab"
+              className={cn('tab', tab === item.id && 'active')}
+              aria-selected={tab === item.id}
+              onClick={() => setTab(item.id as FilterTab)}
+            >
+              {item.label}
             </button>
-          </div>
-        </div>
-      )}
-
-      <div className="approval-view__tabs" role="tablist" aria-label="Filtros de aprovação">
-        <div className="tab-list">
-          <button role="tab" className="tab" aria-selected={false}>
-            Todas ({approvals.length})
-          </button>
-          <button role="tab" className="tab" aria-selected={false}>
-            Pendentes ({pendingApprovals.length})
-          </button>
-          <button role="tab" className="tab" aria-selected={false}>
-            Minhas para Aprovar ({myPendingApprovals.length})
-          </button>
-          <button role="tab" className="tab" aria-selected={false}>
-            Solicitadas por Mim ({requestedApprovals.length})
-          </button>
+          ))}
         </div>
       </div>
 
-      <div className="approval-view__list flex-1 overflow-y-auto p-4">
-        {approvals.length === 0 ? (
-          <div className="empty-state flex-1 flex items-center justify-center">
-            <FileText className="empty-state__icon" size={64} />
-            <div className="text-center">
-              <h3 className="empty-state__title">Nenhuma aprovação</h3>
-              <p className="empty-state__description">
-                Crie sua primeira solicitação de aprovação clicando em "Nova Aprovação"
-              </p>
+      <div className="view-body">
+        {error && (
+          <div className="error-inline mb-4" role="alert">
+            <AlertCircle size={18} className="error-inline__icon" aria-hidden="true" />
+            <div>
+              <strong>Erro ao carregar aprovações:</strong> {error.message}
+              <div>
+                <button className="btn btn-ghost btn-sm mt-2" onClick={refetch}>
+                  Tentar novamente
+                </button>
+              </div>
             </div>
           </div>
+        )}
+
+        {tab === 'decisions' ? (
+          <div className="stack-md">
+            {loadingDecisions ? (
+              <p className="text-body-sm text-tertiary">Carregando decisões...</p>
+            ) : decisions.length === 0 ? (
+              <div className="empty-state">
+                <Scale className="empty-state__icon" size={48} aria-hidden="true" />
+                <h3 className="empty-state__title">Nenhuma decisão pendente</h3>
+                <p className="empty-state__description">
+                  Quando um agente solicitar uma decisão com múltiplas opções, ela aparecerá aqui.
+                </p>
+              </div>
+            ) : (
+              decisions.map((d) => (
+                <article key={d.id} className="card stack-sm">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <h3 className="text-body" style={{ fontWeight: 600 }}>
+                      {d.title}
+                    </h3>
+                    <span className="badge badge-info">{d.status}</span>
+                  </div>
+                  <p className="text-body-sm text-secondary">{d.body}</p>
+                  {d.status === 'open' && (
+                    <div className="flex items-center gap-2 flex-wrap mt-2">
+                      {d.options.map((opt) => (
+                        <button
+                          key={opt.id}
+                          className="btn btn-primary btn-sm"
+                          onClick={() => handleDecide(d.id, opt.id)}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => handleDismissDecision(d.id)}
+                      >
+                        Dispensar
+                      </button>
+                    </div>
+                  )}
+                </article>
+              ))
+            )}
+          </div>
+        ) : visibleApprovals.length === 0 ? (
+          <div className="empty-state">
+            <FileText className="empty-state__icon" size={48} aria-hidden="true" />
+            <h3 className="empty-state__title">Nenhuma aprovação nesta aba</h3>
+            <p className="empty-state__description">
+              Solicitações de agentes ou do board aparecem aqui para revisão e aprovação.
+            </p>
+          </div>
         ) : (
-          <div className="space-y-3" role="list" aria-label="Lista de aprovações">
-            {approvals.map((approval) => {
-              const config = statusConfig[approval.status as ApprovalStatus] || statusConfig.pending
-              const StatusIcon = config.icon
-              const requester = getRequester(approval.requestedBy)
-              const approver = getApprover(approval.approverAgentId)
-              const canAct = approval.status === 'pending' && approval.approverAgentId === currentUserId
-              const isMine = approval.requestedBy === currentUserId
+          <div className="stack-md" role="list" aria-label="Lista de aprovações">
+            {visibleApprovals.map((approval) => {
+              const cfg = statusConfig[approval.status] ?? statusConfig.pending
+              const StatusIcon = cfg.icon
+              const requester = getRequester(approval)
+              const isPending = approval.status === 'pending' || approval.status === 'revision_requested'
+              const isUpdating = updatingId === approval.id
 
               return (
-                <ApprovalCard
-                  key={approval.id}
-                  approval={approval}
-                  config={config}
-                  StatusIcon={StatusIcon}
-                  requester={requester}
-                  approver={approver}
-                  canAct={canAct}
-                  isMine={isMine}
-                  onViewDetails={() => setSelectedApproval(approval)}
-                  onApprove={() => canAct && handleUpdateApproval(approval.id, 'approved')}
-                  onReject={() => canAct && handleUpdateApproval(approval.id, 'rejected')}
-                  updating={updating === approval.id}
-                />
+                <article key={approval.id} className="card" role="listitem">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="flex items-start gap-3 flex-1 min-w-0">
+                      <div
+                        className="avatar avatar-md"
+                        style={{
+                          backgroundColor: requester
+                            ? getAgentColor(requester.ref)
+                            : 'var(--color-bg-surface-elevated)',
+                        }}
+                        aria-hidden="true"
+                      >
+                        {requester ? getInitials(requester.name) : <FileText size={18} />}
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="text-body text-primary" style={{ fontWeight: 600 }}>
+                            {approval.title}
+                          </h3>
+                          <span className={cn('badge', cfg.badge)}>
+                            <StatusIcon size={12} aria-hidden="true" />
+                            {cfg.label}
+                          </span>
+                          {approval.type && (
+                            <span className="badge badge-neutral text-mono">{approval.type}</span>
+                          )}
+                        </div>
+                        {approval.description && (
+                          <p className="text-body-sm text-secondary mt-1" style={{ whiteSpace: 'pre-wrap' }}>
+                            {approval.description}
+                          </p>
+                        )}
+                        <div className="flex items-center gap-3 mt-2 text-caption text-tertiary flex-wrap">
+                          {requester && <span>Solicitante: {requester.name}</span>}
+                          <time dateTime={approval.createdAt}>
+                            Criada em {formatTimestamp(approval.createdAt)}
+                          </time>
+                          {approval.decisionNote && (
+                            <span>Nota: &ldquo;{approval.decisionNote}&rdquo;</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap flex-shrink-0">
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setSelectedApproval(approval)}
+                        aria-label={`Detalhes da aprovação ${approval.title}`}
+                      >
+                        <ExternalLink size={15} aria-hidden="true" />
+                        Detalhes
+                      </button>
+
+                      {isPending && !isUpdating && (
+                        <>
+                          <button
+                            className="btn btn-success btn-sm"
+                            onClick={() => handleAct(approval.id, 'approve')}
+                          >
+                            <CheckCircle size={15} aria-hidden="true" />
+                            Aprovar
+                          </button>
+                          <button
+                            className="btn btn-danger btn-sm"
+                            onClick={() => handleAct(approval.id, 'reject')}
+                          >
+                            <XCircle size={15} aria-hidden="true" />
+                            Rejeitar
+                          </button>
+                        </>
+                      )}
+
+                      {isUpdating && <Loader2 size={18} className="animate-spin" aria-label="Processando" />}
+                    </div>
+                  </div>
+                </article>
               )
             })}
           </div>
@@ -181,7 +376,6 @@ export function ApprovalView({ companyId, agents, currentUserId }: ApprovalViewP
       {showCreateModal && (
         <CreateApprovalModal
           agents={agents}
-          currentUserId={currentUserId}
           onClose={() => setShowCreateModal(false)}
           onSubmit={handleCreateApproval}
           loading={creating}
@@ -192,6 +386,8 @@ export function ApprovalView({ companyId, agents, currentUserId }: ApprovalViewP
         <ApprovalDetailModal
           approval={selectedApproval}
           agents={agents}
+          updating={updatingId === selectedApproval.id}
+          onAct={(action, note) => handleAct(selectedApproval.id, action, note)}
           onClose={() => setSelectedApproval(null)}
         />
       )}
@@ -199,226 +395,128 @@ export function ApprovalView({ companyId, agents, currentUserId }: ApprovalViewP
   )
 }
 
-interface ApprovalCardProps {
-  approval: Approval
-  config: StatusConfig
-  StatusIcon: LucideIcon
-  requester: Agent | null
-  approver: Agent | null
-  canAct: boolean
-  isMine: boolean
-  onViewDetails: () => void
-  onApprove: () => void
-  onReject: () => void
-  updating: boolean
-}
-
-function ApprovalCard({
-  approval,
-  config,
-  StatusIcon,
-  requester,
-  approver,
-  canAct,
-  isMine,
-  onViewDetails,
-  onApprove,
-  onReject,
-  updating,
-}: ApprovalCardProps) {
-  return (
-    <article
-      className={cn(
-        'card approval-card',
-        'hover:border-[var(--color-border-default)] hover:shadow-md transition-all duration-fast'
-      )}
-      role="listitem"
-    >
-      <div className="flex items-start gap-4">
-        <div
-          className={cn(
-            'flex-shrink-0 w-12 h-12 rounded-lg flex items-center justify-center',
-            `bg-[${config.bg}] border-2`,
-            `border-[${config.border}]`
-          )}
-        >
-          <StatusIcon size={24} className={cn('text-[', config.color, ']')} aria-hidden="true" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex-1 min-w-0">
-              <h3 className="text-body font-medium text-[var(--color-text-primary)] text-truncate">
-                {approval.title}
-              </h3>
-              <p className="text-[var(--text-caption)] text-[var(--color-text-tertiary)] text-truncate-2 mt-1">
-                {approval.description}
-              </p>
-            </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <span
-                className={cn(
-                  'badge',
-                  'flex items-center gap-1',
-                  `text-[${config.color}]`,
-                  `bg-[${config.bg}]`,
-                  `border border-[${config.border}]`
-                )}
-              >
-                <StatusIcon size={12} aria-hidden="true" />
-                {config.label}
-              </span>
-            </div>
-          </div>
-          <div className="flex items-center gap-4 mt-2 flex-wrap text-[var(--text-caption)]">
-            {requester && (
-              <div className="flex items-center gap-1.5 text-[var(--color-text-secondary)]">
-                <span>Solicitado por:</span>
-                <span className="font-medium text-[var(--color-text-primary)]">{requester.name}</span>
-                <span className="text-[var(--color-text-tertiary)]">({requester.role})</span>
-              </div>
-            )}
-            {approver && (
-              <div className="flex items-center gap-1.5 text-[var(--color-text-secondary)]">
-                <span>Aprovador:</span>
-                <span className="font-medium text-[var(--color-text-primary)]">{approver.name}</span>
-                <span className="text-[var(--color-text-tertiary)]">({approver.role})</span>
-              </div>
-            )}
-            <time className="text-[var(--color-text-tertiary)]" dateTime={approval.createdAt}>
-              {formatTimestamp(approval.createdAt)}
-            </time>
-            {isMine && (
-              <span className="badge badge-brand badge-sm">Minha solicitação</span>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <button
-            className="btn btn-ghost btn-icon"
-            onClick={onViewDetails}
-            aria-label="Ver detalhes da aprovação"
-          >
-            <ExternalLink size={20} />
-          </button>
-          {canAct && !updating && (
-            <>
-              <button
-                className="btn btn-success btn-sm"
-                onClick={onApprove}
-                aria-label="Aprovar"
-              >
-                <CheckCircle size={16} className="mr-1" />
-                Aprovar
-              </button>
-              <button
-                className="btn btn-danger btn-sm"
-                onClick={onReject}
-                aria-label="Rejeitar"
-              >
-                <XCircle size={16} className="mr-1" />
-                Rejeitar
-              </button>
-            </>
-          )}
-          {canAct && updating && (
-            <Loader2 size={20} className="animate-spin text-[var(--color-brand-primary)]" />
-          )}
-        </div>
-      </div>
-    </article>
-  )
-}
-
 interface CreateApprovalModalProps {
   agents: Agent[]
-  currentUserId?: string
   onClose: () => void
-  onSubmit: (data: { title: string; description: string; approverAgentId: string }) => Promise<void>
+  onSubmit: (data: { title: string; description: string; type: string; requestedByAgentId?: string }) => Promise<void>
   loading: boolean
 }
 
-function CreateApprovalModal({ agents, currentUserId, onClose, onSubmit, loading }: CreateApprovalModalProps) {
+function CreateApprovalModal({ agents, onClose, onSubmit, loading }: CreateApprovalModalProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [approverAgentId, setApproverAgentId] = useState('')
+  const [type, setType] = useState('board_decision')
+  const [requestedByAgentId, setRequestedByAgentId] = useState('')
 
-  const availableApprovers = agents.filter((a) => a.id !== currentUserId)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!title.trim() || !approverAgentId) return
-    await onSubmit({ title: title.trim(), description: description.trim(), approverAgentId })
+    if (!title.trim()) return
+    await onSubmit({
+      title: title.trim(),
+      description: description.trim(),
+      type,
+      requestedByAgentId: requestedByAgentId || undefined,
+    })
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose} aria-hidden="true">
-      <div className="modal modal-md" role="dialog" aria-modal="true" aria-labelledby="create-approval-title">
+    <div className="modal-overlay-flex" role="dialog" aria-modal="true" aria-labelledby="create-approval-title">
+      <div className="modal-backdrop" onClick={onClose} aria-hidden="true" />
+      <div className="modal-card">
         <div className="modal__header">
-          <h3 id="create-approval-title" className="modal__title">Nova Solicitação de Aprovação</h3>
+          <h3 id="create-approval-title" className="modal__title">
+            Nova Solicitação de Aprovação
+          </h3>
           <button className="modal__close" onClick={onClose} aria-label="Fechar">
-            <XCircle size={24} />
+            <XCircle size={20} />
           </button>
         </div>
-        <form onSubmit={handleSubmit} className="modal__body" id="create-approval-form">
-          <div className="space-y-4">
+
+        <form onSubmit={handleSubmit} className="modal__body stack-md">
+          <div>
+            <label htmlFor="approval-title" className="label">
+              Título *
+            </label>
+            <input
+              id="approval-title"
+              type="text"
+              className="input-base"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Ex: Deploy v2.0 em produção"
+              required
+              autoFocus
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <label htmlFor="approval-title" className="label">Título *</label>
-              <input
-                id="approval-title"
-                type="text"
-                className="input-base"
-                placeholder="Título da aprovação"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                required
-                autoFocus
-              />
-            </div>
-            <div>
-              <label htmlFor="approval-description" className="label">Descrição</label>
-              <textarea
-                id="approval-description"
-                className="input-base"
-                rows={4}
-                placeholder="Descreva o que precisa ser aprovado..."
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
-            </div>
-            <div>
-              <label htmlFor="approval-approver" className="label">Aprovador *</label>
+              <label htmlFor="approval-type" className="label">
+                Tipo
+              </label>
               <select
-                id="approval-approver"
+                id="approval-type"
                 className="input-base"
-                value={approverAgentId}
-                onChange={(e) => setApproverAgentId(e.target.value)}
-                required
+                value={type}
+                onChange={(e) => setType(e.target.value)}
               >
-                <option value="">Selecione o aprovador</option>
-                {availableApprovers.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.name} — {agent.role}
+                <option value="board_decision">Decisão do Board</option>
+                <option value="deploy_production">Deploy Produção</option>
+                <option value="budget_override_required">Orçamento</option>
+                <option value="hire_agent">Contratação de Agente</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="approval-agent" className="label">
+                Agente Solicitante
+              </label>
+              <select
+                id="approval-agent"
+                className="input-base"
+                value={requestedByAgentId}
+                onChange={(e) => setRequestedByAgentId(e.target.value)}
+              >
+                <option value="">Board / Usuário</option>
+                {agents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
                   </option>
                 ))}
               </select>
             </div>
           </div>
+
+          <div>
+            <label htmlFor="approval-description" className="label">
+              Descrição / Detalhes
+            </label>
+            <textarea
+              id="approval-description"
+              className="input-base"
+              rows={4}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Contexto para decisão..."
+            />
+          </div>
+
+          <div className="modal__footer" style={{ padding: '12px 0 0 0' }}>
+            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={loading}>
+              Cancelar
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={loading || !title.trim()}>
+              {loading ? 'Criando...' : 'Criar Aprovação'}
+            </button>
+          </div>
         </form>
-        <div className="modal__footer">
-          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={loading}>
-            Cancelar
-          </button>
-          <button type="submit" form="create-approval-form" className="btn btn-primary" disabled={loading || !title.trim() || !approverAgentId}>
-            {loading ? (
-              <>
-                <Loader2 size={18} className="mr-2 animate-spin" />
-                Criando...
-              </>
-            ) : (
-              'Criar Aprovação'
-            )}
-          </button>
-        </div>
       </div>
     </div>
   )
@@ -427,141 +525,154 @@ function CreateApprovalModal({ agents, currentUserId, onClose, onSubmit, loading
 interface ApprovalDetailModalProps {
   approval: Approval
   agents: Agent[]
+  updating: boolean
+  onAct: (action: 'approve' | 'reject' | 'request_revision' | 'cancel' | 'resubmit', note?: string) => Promise<void>
   onClose: () => void
 }
 
-function ApprovalDetailModal({ approval, agents, onClose }: ApprovalDetailModalProps) {
-  const config = statusConfig[approval.status as ApprovalStatus] || statusConfig.pending
-  const StatusIcon = config.icon
-  const requester = agents.find((a) => a.id === approval.requestedBy)
-  const approver = approval.approverAgentId ? agents.find((a) => a.id === approval.approverAgentId) : null
+function ApprovalDetailModal({ approval, agents, updating, onAct, onClose }: ApprovalDetailModalProps) {
+  const [note, setNote] = useState('')
+  const [comments, setComments] = useState<ApprovalComment[]>([])
+  const [commentText, setCommentText] = useState('')
+  const [sendingComment, setSendingComment] = useState(false)
+
+  useEffect(() => {
+    api.listApprovalComments(approval.id).then(setComments).catch(() => {})
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [approval.id, onClose])
+
+  const requester = agents.find((a) => a.id === (approval.requestedByAgentId || approval.requestedBy))
+  const isPending = approval.status === 'pending' || approval.status === 'revision_requested'
+
+  const handleComment = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!commentText.trim()) return
+    setSendingComment(true)
+    try {
+      const added = await api.addApprovalComment(approval.id, commentText.trim())
+      setComments((prev) => [...prev, added])
+      setCommentText('')
+    } finally {
+      setSendingComment(false)
+    }
+  }
 
   return (
-    <div className="modal-backdrop" onClick={onClose} aria-hidden="true">
-      <div className="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="approval-detail-title">
+    <div className="modal-overlay-flex" role="dialog" aria-modal="true" aria-labelledby="approval-detail-title">
+      <div className="modal-backdrop" onClick={onClose} aria-hidden="true" />
+      <div className="modal-card modal-card--lg">
         <div className="modal__header">
-          <h3 id="approval-detail-title" className="modal__title">Detalhes da Aprovação</h3>
+          <h3 id="approval-detail-title" className="modal__title">
+            {approval.title}
+          </h3>
           <button className="modal__close" onClick={onClose} aria-label="Fechar">
-            <XCircle size={24} />
+            <XCircle size={20} />
           </button>
         </div>
-        <div className="modal__body">
-          <div className="space-y-6">
-            <div className="flex items-center gap-4 p-4 bg-[var(--color-bg-surface-elevated)] rounded-lg">
-              <div
-                className={cn(
-                  'flex-shrink-0 w-16 h-16 rounded-lg flex items-center justify-center',
-                  `bg-[${config.bg}] border-2`,
-                  `border-[${config.border}]`
-                )}
-              >
-                <StatusIcon size={32} className={cn('text-[', config.color, ']')} aria-hidden="true" />
-              </div>
-              <div className="flex-1">
-                <h4 className="text-h3 font-semibold text-[var(--color-text-primary)]">{approval.title}</h4>
-                <div className="flex items-center gap-3 mt-2 flex-wrap">
-                  <span
-                    className={cn(
-                      'badge',
-                      'flex items-center gap-1',
-                      `text-[${config.color}]`,
-                      `bg-[${config.bg}]`,
-                      `border border-[${config.border}]`
-                    )}
-                  >
-                    <StatusIcon size={14} aria-hidden="true" />
-                    {config.label}
-                  </span>
-                  {approval.decidedAt && (
-                    <time className="text-[var(--text-caption)] text-[var(--color-text-tertiary)]" dateTime={approval.decidedAt}>
-                      Decidido em {formatTimestamp(approval.decidedAt)}
-                    </time>
-                  )}
-                </div>
-              </div>
-            </div>
 
-            <div>
-              <h5 className="text-body-sm font-medium text-[var(--color-text-secondary)] mb-3">Descrição</h5>
-              <p className="text-[var(--color-text-primary)] whitespace-pre-wrap">{approval.description || 'Sem descrição'}</p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-4 bg-[var(--color-bg-surface-elevated)] rounded-lg">
-                <h5 className="text-body-sm font-medium text-[var(--color-text-secondary)] mb-3">Solicitante</h5>
-                {requester ? (
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="avatar avatar-md"
-                      style={{ backgroundColor: getAgentColor(requester.ref) }}
-                    >
-                      {requester.avatar ? (
-                        <img src={requester.avatar} alt="" />
-                      ) : (
-                        getInitials(requester.name)
-                      )}
-                    </div>
-                    <div>
-                      <p className="font-medium text-[var(--color-text-primary)]">{requester.name}</p>
-                      <p className="text-[var(--text-caption)] text-[var(--color-text-tertiary)]">{requester.role}</p>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-[var(--color-text-tertiary)]">Não identificado</p>
-                )}
-              </div>
-
-              <div className="p-4 bg-[var(--color-bg-surface-elevated)] rounded-lg">
-                <h5 className="text-body-sm font-medium text-[var(--color-text-secondary)] mb-3">Aprovador</h5>
-                {approver ? (
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="avatar avatar-md"
-                      style={{ backgroundColor: getAgentColor(approver.ref) }}
-                    >
-                      {approver.avatar ? (
-                        <img src={approver.avatar} alt="" />
-                      ) : (
-                        getInitials(approver.name)
-                      )}
-                    </div>
-                    <div>
-                      <p className="font-medium text-[var(--color-text-primary)]">{approver.name}</p>
-                      <p className="text-[var(--text-caption)] text-[var(--color-text-tertiary)]">{approver.role}</p>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-[var(--color-text-tertiary)]">Não definido</p>
-                )}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="p-4 bg-[var(--color-bg-surface-elevated)] rounded-lg">
-                <h5 className="text-body-sm font-medium text-[var(--color-text-secondary)] mb-1">Criado em</h5>
-                <time className="text-[var(--color-text-primary)]" dateTime={approval.createdAt}>
-                  {formatTimestamp(approval.createdAt)}
-                </time>
-              </div>
-              <div className="p-4 bg-[var(--color-bg-surface-elevated)] rounded-lg">
-                <h5 className="text-body-sm font-medium text-[var(--color-text-secondary)] mb-1">Atualizado em</h5>
-                <time className="text-[var(--color-text-primary)]" dateTime={approval.updatedAt}>
-                  {formatTimestamp(approval.updatedAt)}
-                </time>
-              </div>
-              {approval.decidedAt && (
-                <div className="p-4 bg-[var(--color-bg-surface-elevated)] rounded-lg">
-                  <h5 className="text-body-sm font-medium text-[var(--color-text-secondary)] mb-1">Decidido em</h5>
-                  <time className="text-[var(--color-text-primary)]" dateTime={approval.decidedAt}>
-                    {formatTimestamp(approval.decidedAt)}
-                  </time>
-                </div>
-              )}
-            </div>
+        <div className="modal__body stack-lg">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={cn('badge', statusConfig[approval.status]?.badge ?? 'badge-neutral')}>
+              {statusConfig[approval.status]?.label ?? approval.status}
+            </span>
+            {requester && <span className="text-caption text-secondary">Solicitante: {requester.name}</span>}
+            <time className="text-caption text-tertiary" dateTime={approval.createdAt}>
+              {formatTimestamp(approval.createdAt)}
+            </time>
           </div>
-        </div>
-        <div className="modal__footer">
-          <button className="btn btn-primary" onClick={onClose}>Fechar</button>
+
+          <p className="text-body-sm" style={{ whiteSpace: 'pre-wrap' }}>
+            {approval.description || 'Sem descrição.'}
+          </p>
+
+          {isPending && (
+            <div className="card stack-sm">
+              <label htmlFor="decision-note" className="label">
+                Nota de decisão (opcional)
+              </label>
+              <input
+                id="decision-note"
+                className="input-base"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Motivo ou instrução para o agente..."
+              />
+              <div className="flex items-center gap-2 flex-wrap mt-2">
+                <button
+                  className="btn btn-success btn-sm"
+                  disabled={updating}
+                  onClick={() => onAct('approve', note)}
+                >
+                  Aprovar
+                </button>
+                <button
+                  className="btn btn-warning btn-sm"
+                  disabled={updating}
+                  onClick={() => onAct('request_revision', note)}
+                >
+                  Pedir Revisão
+                </button>
+                <button
+                  className="btn btn-danger btn-sm"
+                  disabled={updating}
+                  onClick={() => onAct('reject', note)}
+                >
+                  Rejeitar
+                </button>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  disabled={updating}
+                  onClick={() => onAct('cancel', note)}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {approval.status === 'revision_requested' && (
+            <div>
+              <button
+                className="btn btn-primary btn-sm"
+                disabled={updating}
+                onClick={() => onAct('resubmit')}
+              >
+                Reenviar para Aprovação
+              </button>
+            </div>
+          )}
+
+          <div className="stack-sm">
+            <h4 className="text-body-sm flex items-center gap-2" style={{ fontWeight: 600 }}>
+              <MessageSquare size={15} aria-hidden="true" />
+              Comentários ({comments.length})
+            </h4>
+            <form onSubmit={handleComment} className="flex items-center gap-2">
+              <input
+                type="text"
+                className="input-base flex-1"
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+                placeholder="Adicionar comentário nesta aprovação..."
+                aria-label="Comentário na aprovação"
+              />
+              <button type="submit" className="btn btn-primary btn-sm" disabled={sendingComment || !commentText.trim()}>
+                <Send size={14} />
+              </button>
+            </form>
+            {comments.map((c) => (
+              <div key={c.id} className="card" style={{ padding: '10px 12px' }}>
+                <div className="text-body-sm">{c.body}</div>
+                <time className="text-caption text-tertiary" dateTime={c.createdAt}>
+                  {formatTimestamp(c.createdAt)}
+                </time>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>

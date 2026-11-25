@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, generateClientRequestId } from '../lib/api'
-import type { ChatSession, Message, Issue } from '../types/api'
+import type { ChatSession, Message, Issue, Approval } from '../types/api'
 
 interface UseChatOptions {
   companyId: string
@@ -25,11 +25,15 @@ export function useChat({ companyId, agentRef, onNewMessage }: UseChatOptions) {
       setMessages(data.messages)
       setSubject(data.session.subject)
       setError(null)
+      if (data.session?.id) {
+        api.markIssueRead(data.session.id).catch(() => {})
+      }
     } catch (err) {
       if (err instanceof Error && err.message.includes('404')) {
         setSession(null)
         setMessages([])
         setSubject('')
+        setError(null)
       } else {
         setError(err instanceof Error ? err : new Error('Erro ao carregar conversa'))
       }
@@ -37,6 +41,26 @@ export function useChat({ companyId, agentRef, onNewMessage }: UseChatOptions) {
       setLoading(false)
     }
   }, [companyId, agentRef])
+
+  const selectSessionById = useCallback(
+    async (issueId: string) => {
+      if (!issueId) return
+      try {
+        setLoading(true)
+        const data = await api.getSessionByIssueId(issueId, agentRef)
+        setSession(data.session)
+        setMessages(data.messages)
+        setSubject(data.session.subject)
+        setError(null)
+        api.markIssueRead(issueId).catch(() => {})
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error('Erro ao abrir conversa'))
+      } finally {
+        setLoading(false)
+      }
+    },
+    [agentRef]
+  )
 
   const createNewSession = useCallback(
     async (newSubject?: string) => {
@@ -93,7 +117,6 @@ export function useChat({ companyId, agentRef, onNewMessage }: UseChatOptions) {
               : msg
           )
         )
-        setSession(response.session)
 
         if (onNewMessage) {
           onNewMessage(response.message)
@@ -114,7 +137,7 @@ export function useChat({ companyId, agentRef, onNewMessage }: UseChatOptions) {
   const refreshSession = useCallback(async () => {
     if (!companyId || !agentRef || !session) return
     try {
-      const data = await api.getChatSession(companyId, agentRef)
+      const data = await api.getSessionByIssueId(session.id, agentRef)
       setMessages(data.messages)
       setSession(data.session)
       setSubject(data.session.subject)
@@ -126,6 +149,15 @@ export function useChat({ companyId, agentRef, onNewMessage }: UseChatOptions) {
   useEffect(() => {
     fetchSession()
   }, [fetchSession])
+
+  // Auto-refresh silencioso a cada 6s enquanto há conversa aberta
+  useEffect(() => {
+    if (!session?.id) return
+    const timer = setInterval(() => {
+      refreshSession()
+    }, 6000)
+    return () => clearInterval(timer)
+  }, [session?.id, refreshSession])
 
   const sendMessageWithRetry = useCallback(
     async (content: string, retries = 3) => {
@@ -150,6 +182,7 @@ export function useChat({ companyId, agentRef, onNewMessage }: UseChatOptions) {
     error,
     subject,
     fetchSession,
+    selectSessionById,
     createNewSession,
     sendMessage: sendMessageWithRetry,
     refreshSession,
@@ -215,11 +248,56 @@ export function useIssues({ companyId, agentId }: UseIssuesOptions) {
     }
   }, [companyId, agentId])
 
+  const updateIssue = useCallback(
+    async (
+      issueId: string,
+      data: {
+        status?: string
+        priority?: string
+        title?: string
+        description?: string
+        assigneeAgentId?: string | null
+        projectId?: string | null
+        goalId?: string | null
+        labelIds?: string[]
+      }
+    ) => {
+      const updated = await api.updateIssue(issueId, data)
+      setIssues((prev) => prev.map((i) => (i.id === issueId ? { ...i, ...updated } : i)))
+      return updated
+    },
+    []
+  )
+
+  const createIssue = useCallback(
+    async (data: {
+      title: string
+      description?: string
+      status?: string
+      priority?: string
+      assigneeAgentId?: string | null
+      projectId?: string | null
+      goalId?: string | null
+      labelIds?: string[]
+    }) => {
+      if (!companyId) throw new Error('Company ID required')
+      const created = await api.createIssue(companyId, data)
+      setIssues((prev) => [created, ...prev])
+      return created
+    },
+    [companyId]
+  )
+
+  const deleteIssue = useCallback(async (issueId: string) => {
+    await api.deleteIssue(issueId)
+    setIssues((prev) => prev.filter((i) => i.id !== issueId))
+  }, [])
+
   useEffect(() => {
     fetchIssues()
   }, [fetchIssues])
 
-  return { issues, loading, error, refetch: fetchIssues }
+  return { issues, loading, error, refetch: fetchIssues, updateIssue, createIssue, deleteIssue }
 }
 
 interface UseApprovalsOptions {
@@ -227,7 +305,7 @@ interface UseApprovalsOptions {
 }
 
 export function useApprovals({ companyId }: UseApprovalsOptions) {
-  const [approvals, setApprovals] = useState<any[]>([])
+  const [approvals, setApprovals] = useState<Approval[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<Error | null>(null)
 
@@ -246,7 +324,7 @@ export function useApprovals({ companyId }: UseApprovalsOptions) {
   }, [companyId])
 
   const createApproval = useCallback(
-    async (data: { title: string; description: string; approverAgentId: string; metadata?: Record<string, unknown> }) => {
+    async (data: { title: string; description: string; approverAgentId?: string; type?: string; metadata?: Record<string, unknown> }) => {
       if (!companyId) throw new Error('Company ID required')
       const approval = await api.createApproval(companyId, data)
       setApprovals((prev) => [approval, ...prev])
@@ -258,10 +336,26 @@ export function useApprovals({ companyId }: UseApprovalsOptions) {
   const updateApproval = useCallback(
     async (approvalId: string, data: { status: 'approved' | 'rejected'; comment?: string }) => {
       const approval = await api.updateApproval(approvalId, data)
-      setApprovals((prev) =>
-        prev.map((a) => (a.id === approvalId ? approval : a))
-      )
+      setApprovals((prev) => prev.map((a) => (a.id === approvalId ? approval : a)))
       return approval
+    },
+    []
+  )
+
+  const actApproval = useCallback(
+    async (
+      approvalId: string,
+      action: 'approve' | 'reject' | 'request_revision' | 'cancel' | 'resubmit',
+      note?: string
+    ) => {
+      let updated: Approval
+      if (action === 'approve') updated = await api.approveApproval(approvalId, note)
+      else if (action === 'reject') updated = await api.rejectApproval(approvalId, note)
+      else if (action === 'request_revision') updated = await api.requestApprovalRevision(approvalId, note)
+      else if (action === 'cancel') updated = await api.cancelApproval(approvalId, note)
+      else updated = await api.resubmitApproval(approvalId)
+      setApprovals((prev) => prev.map((a) => (a.id === approvalId ? updated : a)))
+      return updated
     },
     []
   )
@@ -270,5 +364,5 @@ export function useApprovals({ companyId }: UseApprovalsOptions) {
     fetchApprovals()
   }, [fetchApprovals])
 
-  return { approvals, loading, error, refetch: fetchApprovals, createApproval, updateApproval }
+  return { approvals, loading, error, refetch: fetchApprovals, createApproval, updateApproval, actApproval }
 }
