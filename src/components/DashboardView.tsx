@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   DollarSign,
   Inbox,
-  MessageSquare,
   Play,
   RotateCcw,
   Square,
@@ -15,6 +14,7 @@ import {
 import { api } from '../lib/api'
 import { formatTimestamp } from '../lib/utils'
 import { useToastHelpers } from '../context/ToastContext'
+import { AgentCombobox } from './Sidebar'
 import type { Agent, AttentionFeed, DashboardSummary, HeartbeatRun } from '../types/api'
 
 interface DashboardViewProps {
@@ -179,18 +179,19 @@ export function DashboardView({ companyId, agents, onNavigate, onOpenChat }: Das
                     </button>
                   )}
                 </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  {agents.slice(0, 8).map((ag) => (
-                    <button
-                      key={ag.id}
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => onOpenChat(ag.ref)}
-                    >
-                      <MessageSquare size={13} aria-hidden="true" />
-                      {ag.name.split(' - ')[0]}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div style={{ flex: '1 1 280px', maxWidth: '420px' }}>
+                    <AgentCombobox
+                      agents={agents}
+                      activeAgentRef={null}
+                      onSelectAgent={(ref) => onOpenChat(ref)}
+                      label="Iniciar conversa com agente"
+                      placeholder="Escolha ou digite o nome de um agente para conversar..."
+                    />
+                  </div>
+                  <span className="text-caption text-tertiary">
+                    {agents.length} agentes disponíveis — selecione para abrir o chat
+                  </span>
                 </div>
               </section>
             )}

@@ -28,24 +28,41 @@ const mockAgents: Agent[] = [
 ]
 
 describe('Sidebar', () => {
-  it('renders all agents', () => {
+  it('renders an accessible agent combobox instead of individual agent buttons when expanded', () => {
     render(<Sidebar agents={mockAgents} activeAgentRef="sofia" onSelectAgent={vi.fn()} />)
-    expect(screen.getByText('Sofia')).toBeInTheDocument()
-    expect(screen.getByText('Larissa')).toBeInTheDocument()
-    expect(screen.getByText('Isadora')).toBeInTheDocument()
+    const combobox = screen.getByRole('combobox', { name: /Selecionar agente/i })
+    expect(combobox).toBeInTheDocument()
+    expect(combobox).toHaveValue('Sofia — CEO')
+    expect(screen.queryByRole('button', { name: /Isadora/i })).not.toBeInTheDocument()
   })
 
-  it('highlights active agent', () => {
-    render(<Sidebar agents={mockAgents} activeAgentRef="larissa" onSelectAgent={vi.fn()} />)
-    const larissaButton = screen.getByText('Larissa').closest('button')
-    expect(larissaButton).toHaveClass('active')
-  })
-
-  it('calls onSelectAgent when agent is clicked', () => {
+  it('filters agents in the combobox and calls onSelectAgent when an option is selected', () => {
     const onSelectAgent = vi.fn()
     render(<Sidebar agents={mockAgents} activeAgentRef="sofia" onSelectAgent={onSelectAgent} />)
-    fireEvent.click(screen.getByText('Isadora'))
+
+    const combobox = screen.getByRole('combobox', { name: /Selecionar agente/i })
+    fireEvent.focus(combobox)
+    fireEvent.change(combobox, { target: { value: 'Isa' } })
+
+    const option = screen.getByRole('option', { name: /Isadora/i })
+    expect(option).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /Larissa/i })).not.toBeInTheDocument()
+
+    fireEvent.mouseDown(option)
     expect(onSelectAgent).toHaveBeenCalledWith('isadora')
+  })
+
+  it('supports keyboard navigation (ArrowDown + Enter) in the agent combobox', () => {
+    const onSelectAgent = vi.fn()
+    render(<Sidebar agents={mockAgents} activeAgentRef={null} onSelectAgent={onSelectAgent} />)
+
+    const combobox = screen.getByRole('combobox', { name: /Selecionar agente/i })
+    fireEvent.focus(combobox)
+    // Sorted alphabetically: Isadora (0), Larissa (1), Sofia (2)
+    fireEvent.keyDown(combobox, { key: 'ArrowDown' })
+    fireEvent.keyDown(combobox, { key: 'Enter' })
+
+    expect(onSelectAgent).toHaveBeenCalledWith('larissa')
   })
 
   it('shows collapse/expand button when onToggleCollapse provided', () => {
@@ -56,7 +73,6 @@ describe('Sidebar', () => {
   it('hides agent details when collapsed', () => {
     render(<Sidebar agents={mockAgents} activeAgentRef="sofia" onSelectAgent={vi.fn()} collapsed />)
     expect(screen.queryByText('CEO')).not.toBeInTheDocument()
-    // When collapsed, agent name is in aria-label/title, not visible text
     expect(screen.getByTitle('Sofia')).toBeInTheDocument()
   })
 
