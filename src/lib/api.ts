@@ -571,9 +571,15 @@ class ApiClient {
     return found?.id ?? agentRef
   }
 
-  async createChat(companyId: string, data: { agentRef: string; subject?: string }): Promise<{ session: ChatSession }> {
+  async createChat(
+    companyId: string,
+    data: { agentRef: string; subject?: string; projectId?: string | null }
+  ): Promise<{ session: ChatSession }> {
     if (!data.subject) {
-      const chatIssue = await this.ensureAgentChat(companyId, data.agentRef)
+      let chatIssue = await this.ensureAgentChat(companyId, data.agentRef)
+      if (data.projectId !== undefined && data.projectId !== chatIssue.projectId) {
+        chatIssue = await this.updateIssue(chatIssue.id, { projectId: data.projectId }).catch(() => chatIssue)
+      }
       return {
         session: {
           id: chatIssue.id,
@@ -583,6 +589,7 @@ class ApiClient {
           createdAt: chatIssue.createdAt,
           updatedAt: chatIssue.updatedAt,
           messageCount: 0,
+          projectId: chatIssue.projectId ?? data.projectId ?? null,
         },
       }
     }
@@ -595,6 +602,7 @@ class ApiClient {
         status: 'todo',
         assigneeAgentId: agentId,
         priority: 'medium',
+        ...(data.projectId ? { projectId: data.projectId } : {}),
       }),
     })
     return {
@@ -606,6 +614,7 @@ class ApiClient {
         createdAt: result.createdAt ?? '',
         updatedAt: result.updatedAt ?? '',
         messageCount: 0,
+        projectId: result.projectId ?? data.projectId ?? null,
       },
     }
   }
@@ -648,6 +657,7 @@ class ApiClient {
         messageCount: messages.length,
         identifier: issue.identifier,
         status: issue.status,
+        projectId: issue.projectId ?? null,
         createdByAgentId: issue.createdByAgentId ?? null,
         parentId: issue.parentId ?? null,
       },
@@ -702,6 +712,7 @@ class ApiClient {
       messageCount: 0,
       identifier: i.identifier,
       status: i.status,
+      projectId: i.projectId ?? null,
       createdByAgentId: i.createdByAgentId ?? null,
       parentId: i.parentId ?? null,
     }))

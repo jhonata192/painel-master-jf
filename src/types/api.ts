@@ -48,6 +48,7 @@ export interface ChatSession {
   lastMessage?: Message
   identifier?: string
   status?: string
+  projectId?: string | null
   createdByAgentId?: string | null
   parentId?: string | null
 }

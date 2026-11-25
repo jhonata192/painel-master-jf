@@ -15,11 +15,13 @@ import {
   Check,
   Paperclip,
   XCircle,
+  FolderKanban,
+  X,
 } from 'lucide-react'
 import { cn, formatTime, getInitials, getAgentColor } from '../lib/utils'
 import { api } from '../lib/api'
 import { useChat, useChats } from '../hooks/useChat'
-import type { Agent, HeartbeatRun, Message } from '../types/api'
+import type { Agent, HeartbeatRun, Message, Project } from '../types/api'
 
 interface ChatViewProps {
   agent: Agent
@@ -115,6 +117,9 @@ export function ChatView({ agent, companyId, agents = [], onSelectAgent, onNewMe
   const [showLiveLog, setShowLiveLog] = useState(false)
   const [liveLogText, setLiveLogText] = useState('')
   const [uploading, setUploading] = useState(false)
+  const [projects, setProjects] = useState<Project[]>([])
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
+  const [savingProject, setSavingProject] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -129,6 +134,7 @@ export function ChatView({ agent, companyId, agents = [], onSelectAgent, onNewMe
     fetchSession,
     selectSessionById,
     createNewSession,
+    updateSessionProject,
     sendMessage,
     refreshSession,
   } = useChat({
@@ -149,6 +155,14 @@ export function ChatView({ agent, companyId, agents = [], onSelectAgent, onNewMe
       setSubject('')
     }
   }, [currentSubject])
+
+  useEffect(() => {
+    setSelectedProjectId(session?.projectId ?? null)
+  }, [session?.id, session?.projectId])
+
+  useEffect(() => {
+    api.listProjects(companyId).then(setProjects).catch(() => setProjects([]))
+  }, [companyId])
 
   const scrollToBottom = useCallback(() => {
     const el = messagesEndRef.current
@@ -238,12 +252,50 @@ export function ChatView({ agent, companyId, agents = [], onSelectAgent, onNewMe
   const handleNewSubject = async () => {
     const subjectText = newSubjectInput.trim() || undefined
     try {
-      await createNewSession(subjectText)
+      await createNewSession(subjectText, selectedProjectId)
       setShowNewSubjectInput(false)
       setNewSubjectInput('')
       refetchChats()
     } catch (err) {
       console.error('Failed to create new subject:', err)
+    }
+  }
+
+  const handleProjectChange = async (projectId: string | null) => {
+    setSelectedProjectId(projectId)
+    if (!session?.id) return
+    setSavingProject(true)
+    try {
+      await updateSessionProject(projectId)
+      const pName = projects.find((p) => p.id === projectId)?.name
+      setWakeNotice(
+        projectId
+          ? `Projeto "${pName ?? projectId}" vinculado a esta conversa`
+          : 'Projeto desvinculado desta conversa'
+      )
+      setTimeout(() => setWakeNotice(null), 4000)
+    } catch (err) {
+      setWakeNotice(err instanceof Error ? err.message : 'Erro ao vincular projeto')
+    } finally {
+      setSavingProject(false)
+    }
+  }
+
+  const handleCreateProjectInline = async (name: string) => {
+    setSavingProject(true)
+    try {
+      const created = await api.createProject(companyId, { name, status: 'in_progress' })
+      setProjects((prev) => [...prev, created])
+      setSelectedProjectId(created.id)
+      if (session?.id) {
+        await updateSessionProject(created.id)
+      }
+      setWakeNotice(`Projeto "${created.name}" criado e vinculado`)
+      setTimeout(() => setWakeNotice(null), 4000)
+    } catch (err) {
+      setWakeNotice(err instanceof Error ? err.message : 'Erro ao criar projeto')
+    } finally {
+      setSavingProject(false)
     }
   }
 
@@ -338,6 +390,13 @@ export function ChatView({ agent, companyId, agents = [], onSelectAgent, onNewMe
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          <ProjectCombobox
+            projects={projects}
+            selectedProjectId={selectedProjectId}
+            disabled={savingProject}
+            onSelect={handleProjectChange}
+            onCreateProject={handleCreateProjectInline}
+          />
           {liveRun && (
             <button
               type="button"
@@ -555,7 +614,7 @@ export function ChatView({ agent, companyId, agents = [], onSelectAgent, onNewMe
                 <button
                   type="button"
                   className="btn btn-primary"
-                  onClick={() => createNewSession()}
+                  onClick={() => createNewSession(undefined, selectedProjectId)}
                 >
                   <Plus size={16} aria-hidden="true" />
                   Iniciar Conversa
@@ -782,6 +841,267 @@ function MessageBubble({ message, agent, agents, onSelectAgent, isOwn, isSending
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+interface ProjectComboboxProps {
+  projects: Project[]
+  selectedProjectId: string | null
+  disabled?: boolean
+  onSelect: (projectId: string | null) => void
+  onCreateProject: (name: string) => Promise<void>
+}
+
+type ComboOption =
+  | { kind: 'none'; id: string; label: string }
+  | { kind: 'project'; id: string; label: string; status: string }
+  | { kind: 'create'; id: string; label: string; name: string }
+
+function ProjectCombobox({
+  projects,
+  selectedProjectId,
+  disabled,
+  onSelect,
+  onCreateProject,
+}: ProjectComboboxProps) {
+  const selectedProject = projects.find((p) => p.id === selectedProjectId) ?? null
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [activeIndex, setActiveIndex] = useState(0)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!open) {
+      setQuery(selectedProject?.name ?? '')
+    }
+  }, [selectedProject, open])
+
+  useEffect(() => {
+    if (!open) return
+    const onOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onOutside)
+    return () => document.removeEventListener('mousedown', onOutside)
+  }, [open])
+
+  const trimmed = query.trim().toLowerCase()
+  const filteredProjects = projects.filter((p) =>
+    !trimmed || p.name.toLowerCase().includes(trimmed)
+  )
+  const exactMatch = projects.some((p) => p.name.toLowerCase() === trimmed)
+
+  const options: ComboOption[] = [
+    { kind: 'none', id: '__none__', label: 'Nenhum projeto (geral)' },
+    ...filteredProjects.map((p) => ({
+      kind: 'project' as const,
+      id: p.id,
+      label: p.name,
+      status: p.status,
+    })),
+    ...(trimmed && !exactMatch
+      ? [
+          {
+            kind: 'create' as const,
+            id: '__create__',
+            label: `Criar projeto "${query.trim()}"`,
+            name: query.trim(),
+          },
+        ]
+      : []),
+  ]
+
+  useEffect(() => {
+    setActiveIndex(0)
+  }, [query, open])
+
+  const commitOption = async (opt: ComboOption) => {
+    setOpen(false)
+    if (opt.kind === 'none') {
+      setQuery('')
+      onSelect(null)
+    } else if (opt.kind === 'project') {
+      setQuery(opt.label)
+      onSelect(opt.id)
+    } else {
+      await onCreateProject(opt.name)
+    }
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault()
+      setOpen(true)
+      return
+    }
+    if (!open) return
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setActiveIndex((prev) => (prev + 1) % Math.max(1, options.length))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActiveIndex((prev) => (prev - 1 + options.length) % Math.max(1, options.length))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      const opt = options[activeIndex]
+      if (opt) commitOption(opt)
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      setOpen(false)
+      setQuery(selectedProject?.name ?? '')
+    }
+  }
+
+  const listboxId = 'chat-project-combobox-listbox'
+  const activeOpt = open && options[activeIndex] ? `proj-opt-${options[activeIndex].id}` : undefined
+
+  return (
+    <div ref={containerRef} className="relative" style={{ minWidth: '215px' }}>
+      <div className="relative flex items-center">
+        <FolderKanban
+          size={14}
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: '10px',
+            color: selectedProject ? 'var(--color-brand-primary)' : 'var(--color-text-tertiary)',
+            pointerEvents: 'none',
+          }}
+        />
+        <input
+          ref={inputRef}
+          type="text"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={open}
+          aria-controls={listboxId}
+          aria-activedescendant={activeOpt}
+          aria-label="Projeto da conversa"
+          className="input-base"
+          style={{
+            minHeight: '36px',
+            padding: '4px 54px 4px 30px',
+            fontSize: '0.8125rem',
+            borderColor: selectedProject ? 'var(--color-brand-primary)' : undefined,
+          }}
+          placeholder="Projeto: Geral (digite...)"
+          value={open ? query : (selectedProject?.name ?? '')}
+          disabled={disabled}
+          onFocus={() => {
+            setQuery('')
+            setOpen(true)
+          }}
+          onChange={(e) => {
+            setQuery(e.target.value)
+            if (!open) setOpen(true)
+          }}
+          onKeyDown={handleKeyDown}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            right: '4px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '2px',
+          }}
+        >
+          {selectedProjectId && (
+            <button
+              type="button"
+              onClick={() => {
+                onSelect(null)
+                setQuery('')
+              }}
+              aria-label="Desvincular projeto"
+              title="Desvincular projeto"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--color-text-tertiary)',
+                cursor: 'pointer',
+                padding: '4px',
+                display: 'inline-flex',
+              }}
+            >
+              <X size={13} />
+            </button>
+          )}
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label={open ? 'Fechar lista de projetos' : 'Abrir lista de projetos'}
+            onClick={() => {
+              if (open) {
+                setOpen(false)
+              } else {
+                setQuery('')
+                setOpen(true)
+                inputRef.current?.focus()
+              }
+            }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--color-text-tertiary)',
+              cursor: 'pointer',
+              padding: '4px',
+              display: 'inline-flex',
+            }}
+          >
+            <ChevronDown size={14} />
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <ul
+          id={listboxId}
+          role="listbox"
+          aria-label="Projetos disponíveis"
+          className="dropdown-menu"
+          style={{ width: '100%', maxHeight: '220px', overflowY: 'auto' }}
+        >
+          {options.map((opt, idx) => {
+            const isSelected =
+              (opt.kind === 'none' && !selectedProjectId) ||
+              (opt.kind === 'project' && opt.id === selectedProjectId)
+            const isHighlighted = idx === activeIndex
+            return (
+              <li
+                key={opt.id}
+                id={`proj-opt-${opt.id}`}
+                role="option"
+                aria-selected={isSelected}
+              >
+                <button
+                  type="button"
+                  className={cn('dropdown-item', isHighlighted && 'badge-brand')}
+                  style={{ fontWeight: isSelected ? 600 : 400 }}
+                  onMouseEnter={() => setActiveIndex(idx)}
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    commitOption(opt)
+                  }}
+                >
+                  {opt.kind === 'create' && <Plus size={13} aria-hidden="true" />}
+                  <span className="text-truncate flex-1">{opt.label}</span>
+                  {opt.kind === 'project' && (
+                    <span className="badge badge-neutral" style={{ fontSize: '10px' }}>
+                      {opt.status}
+                    </span>
+                  )}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
     </div>
   )
 }

@@ -63,13 +63,14 @@ export function useChat({ companyId, agentRef, onNewMessage }: UseChatOptions) {
   )
 
   const createNewSession = useCallback(
-    async (newSubject?: string) => {
+    async (newSubject?: string, projectId?: string | null) => {
       if (!companyId || !agentRef) return
       try {
         setLoading(true)
         const data = await api.createChat(companyId, {
           agentRef,
           subject: newSubject,
+          projectId,
         })
         setSession(data.session)
         setMessages([])
@@ -84,6 +85,16 @@ export function useChat({ companyId, agentRef, onNewMessage }: UseChatOptions) {
       }
     },
     [companyId, agentRef]
+  )
+
+  const updateSessionProject = useCallback(
+    async (projectId: string | null) => {
+      if (!session?.id) return
+      const updated = await api.updateIssue(session.id, { projectId })
+      setSession((prev) => (prev ? { ...prev, projectId: updated.projectId ?? null } : prev))
+      return updated
+    },
+    [session?.id]
   )
 
   const sendMessage = useCallback(
@@ -184,6 +195,7 @@ export function useChat({ companyId, agentRef, onNewMessage }: UseChatOptions) {
     fetchSession,
     selectSessionById,
     createNewSession,
+    updateSessionProject,
     sendMessage: sendMessageWithRetry,
     refreshSession,
     setSubject,
