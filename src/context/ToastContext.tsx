@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useMemo, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 
 interface Toast {
@@ -36,8 +36,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setToasts((prev) => prev.filter((t) => t.id !== id))
   }, [])
 
+  const value = useMemo(() => ({ toasts, showToast, hideToast }), [toasts, showToast, hideToast])
+
   return (
-    <ToastContext.Provider value={{ toasts, showToast, hideToast }}>
+    <ToastContext.Provider value={value}>
       {children}
       <ToastContainer toasts={toasts} onClose={hideToast} />
     </ToastContext.Provider>
@@ -132,10 +134,13 @@ function getToastColor(type: Toast['type']): string {
 export function useToastHelpers() {
   const { showToast } = useToast()
 
-  return {
-    success: (title: string, message?: string) => showToast({ type: 'success', title, message }),
-    error: (title: string, message?: string) => showToast({ type: 'error', title, message }),
-    warning: (title: string, message?: string) => showToast({ type: 'warning', title, message }),
-    info: (title: string, message?: string) => showToast({ type: 'info', title, message }),
-  }
+  return useMemo(
+    () => ({
+      success: (title: string, message?: string) => showToast({ type: 'success', title, message }),
+      error: (title: string, message?: string) => showToast({ type: 'error', title, message }),
+      warning: (title: string, message?: string) => showToast({ type: 'warning', title, message }),
+      info: (title: string, message?: string) => showToast({ type: 'info', title, message }),
+    }),
+    [showToast]
+  )
 }

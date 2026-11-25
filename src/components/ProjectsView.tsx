@@ -366,7 +366,7 @@ export function ProjectsView({ companyId, agents }: ProjectsViewProps) {
                     <option value="planned">Planejado</option>
                     <option value="in_progress">Em Andamento</option>
                     <option value="completed">Concluído</option>
-                    <option value="paused">Pausado</option>
+                    <option value="backlog">Backlog</option>
                     <option value="cancelled">Cancelado</option>
                   </select>
                 </div>
