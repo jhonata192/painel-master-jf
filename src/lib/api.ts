@@ -44,6 +44,20 @@ import type {
 
 const API_BASE = '/api'
 
+export class PaperclipApiError extends Error {
+  code: string
+  status: number
+  details?: Record<string, unknown>
+
+  constructor(params: ApiError) {
+    super(params.message)
+    this.name = 'PaperclipApiError'
+    this.code = params.code
+    this.status = params.status
+    this.details = params.details
+  }
+}
+
 function mapAgent(a: any): Agent {
   return {
     id: a.id,
@@ -146,13 +160,12 @@ class ApiClient {
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
-      const error: ApiError = {
+      throw new PaperclipApiError({
         code: errorData.code || 'API_ERROR',
         message: errorData.error || errorData.message || `HTTP ${response.status}: ${response.statusText}`,
         details: errorData.details,
         status: response.status,
-      }
-      throw error
+      })
     }
 
     if (response.status === 204) {

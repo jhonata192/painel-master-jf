@@ -441,8 +441,33 @@ export function TaskView({ companyId, agents, currentAgentId, showOnlyAssigned =
       await deleteIssue(issueId)
       if (detailIssue?.id === issueId) setDetailIssue(null)
       success('Tarefa excluída', `"${title}" foi removida`)
-    } catch (err) {
-      showError('Erro ao excluir', err instanceof Error ? err.message : 'Erro desconhecido')
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : String(err)
+      const isConstraintError =
+        err?.status === 500 ||
+        err?.status === 409 ||
+        /foreign key|restrict|chat_conversations|failed query/i.test(msg)
+
+      if (isConstraintError) {
+        const shouldCancel = confirm(
+          `Não foi possível apagar "${title}" fisicamente porque ela está vinculada a uma conversa/chat ou histórico no Paperclip.\n\nDeseja marcar a tarefa como "Cancelada"?`
+        )
+        if (shouldCancel) {
+          try {
+            await updateIssue(issueId, { status: 'cancelled' })
+            if (detailIssue?.id === issueId) setDetailIssue(null)
+            success('Tarefa cancelada', `"${title}" foi marcada como cancelada`)
+            return
+          } catch (cancelErr) {
+            showError(
+              'Erro ao cancelar',
+              cancelErr instanceof Error ? cancelErr.message : 'Falha ao cancelar tarefa'
+            )
+            return
+          }
+        }
+      }
+      showError('Erro ao excluir', msg)
     } finally {
       setDeletingId(null)
     }

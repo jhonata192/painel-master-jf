@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { api } from './api'
+import { api, PaperclipApiError } from './api'
 
 describe('ApiClient — Paperclip full integration', () => {
   const companyId = 'company-123'
@@ -135,5 +135,23 @@ describe('ApiClient — Paperclip full integration', () => {
       '/api/companies/company-123/dashboard',
       expect.any(Object)
     )
+  })
+
+  it('throws PaperclipApiError (instanceof Error) on non-OK HTTP responses', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: async () => ({ error: 'Failed query: delete from "issues"' }),
+      })
+    )
+
+    await expect(api.deleteIssue('issue-1')).rejects.toThrow(PaperclipApiError)
+    await expect(api.deleteIssue('issue-1')).rejects.toMatchObject({
+      status: 500,
+      message: 'Failed query: delete from "issues"',
+    })
   })
 })
