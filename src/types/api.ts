@@ -53,15 +53,35 @@ export interface ChatSession {
   parentId?: string | null
 }
 
+export interface DelegationInfo {
+  taskId: string
+  identifier?: string
+  title: string
+  status: string
+  description?: string | null
+  fromAgentId?: string | null
+  toAgentId?: string | null
+  toAgentName?: string
+  toAgentRef?: string
+  latestReply?: {
+    authorAgentId?: string | null
+    content: string
+    timestamp: string
+  } | null
+  commentCount?: number
+}
+
 export interface Message {
   id: string
   sessionId: string
   role: 'user' | 'assistant' | 'system'
+  kind?: 'text' | 'delegation'
   content: string
   timestamp: string
   authorAgentId?: string | null
   isBriefing?: boolean
   clientRequestId?: string
+  delegation?: DelegationInfo
   metadata?: Record<string, unknown>
 }
 
@@ -88,6 +108,7 @@ export interface IssueLabel {
 
 export interface Issue {
   id: string
+  companyId?: string
   identifier?: string
   issueNumber?: number
   title: string

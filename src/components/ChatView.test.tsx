@@ -145,4 +145,104 @@ describe('ChatView', () => {
       expect(screen.getByRole('button', { name: /Acompanhar execução/i })).toBeInTheDocument()
     })
   })
+
+  it('renders delegated tasks chronologically inside the chat timeline with agent switch button', async () => {
+    const onSelectAgent = vi.fn()
+    const alexandra: Agent = {
+      id: 'agent-a11y',
+      name: 'Alexandra - Acessibilidade',
+      role: 'A11y Specialist',
+      description: 'WCAG AAA',
+      ref: 'alexandra',
+    }
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/chats/larissa')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              id: 'chat-issue-1',
+              companyId: 'c-1',
+              title: 'Chat com Larissa',
+              assigneeAgentId: 'agent-1',
+              createdAt: '2026-11-25T12:00:00Z',
+              updatedAt: '2026-11-25T12:20:00Z',
+            }),
+          })
+        }
+        if (url.includes('/issues/chat-issue-1/comments')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => [
+              {
+                id: 'c-1',
+                issueId: 'chat-issue-1',
+                authorAgentId: null,
+                body: 'Analise o projeto',
+                createdAt: '2026-11-25T12:10:00Z',
+              },
+            ],
+          })
+        }
+        if (url.includes('createdFromIssueId=chat-issue-1')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => [
+              {
+                id: 'del-task-1',
+                identifier: 'MAS-2',
+                title: 'Review PR #14 WCAG 2.2 AAA',
+                description: 'Verificar contrastes e leitores de tela.',
+                status: 'done',
+                createdByAgentId: 'agent-1',
+                assigneeAgentId: 'agent-a11y',
+                createdAt: '2026-11-25T12:12:00Z',
+                updatedAt: '2026-11-25T12:15:00Z',
+              },
+            ],
+          })
+        }
+        if (url.includes('/issues/del-task-1/comments')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => [
+              {
+                id: 'c-del-1',
+                issueId: 'del-task-1',
+                authorAgentId: 'agent-a11y',
+                body: 'Auditoria concluída com conformidade WCAG AAA.',
+                createdAt: '2026-11-25T12:14:00Z',
+              },
+            ],
+          })
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => [] })
+      })
+    )
+
+    render(
+      <ChatView
+        agent={mockAgent}
+        companyId="c-1"
+        agents={[mockAgent, alexandra]}
+        onSelectAgent={onSelectAgent}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Review PR #14 WCAG 2.2 AAA')).toBeInTheDocument()
+      expect(screen.getByText('MAS-2')).toBeInTheDocument()
+      expect(screen.getByText('Concluída')).toBeInTheDocument()
+      expect(screen.getByText(/Auditoria concluída com conformidade WCAG AAA/i)).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Abrir conversa de Alexandra/i }))
+    expect(onSelectAgent).toHaveBeenCalledWith('alexandra')
+  })
 })

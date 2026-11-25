@@ -20,6 +20,7 @@ import type {
   CreateApprovalRequest,
   DashboardSummary,
   DecisionItem,
+  DelegationInfo,
   Goal,
   HealthStatus,
   HeartbeatRun,
@@ -90,6 +91,7 @@ function mapAgent(a: any): Agent {
 function mapIssue(i: any): Issue {
   return {
     id: i.id,
+    companyId: i.companyId ?? undefined,
     identifier: i.identifier ?? undefined,
     issueNumber: i.issueNumber ?? undefined,
     title: i.title ?? '(sem título)',
@@ -632,10 +634,78 @@ class ApiClient {
     }
   }
 
+  private async getDelegatedTasksWithReplies(
+    companyId: string | undefined,
+    issueId: string
+  ): Promise<DelegationInfo[]> {
+    if (!companyId || !issueId) return []
+    const [createdRes, descendantRes] = await Promise.allSettled([
+      this.request<any>(
+        `/companies/${companyId}/issues?createdFromIssueId=${encodeURIComponent(issueId)}&includeRoutineExecutions=true`
+      ),
+      this.request<any>(
+        `/companies/${companyId}/issues?descendantOf=${encodeURIComponent(issueId)}`
+      ),
+    ])
+
+    const byId = new Map<string, Issue>()
+    for (const res of [createdRes, descendantRes]) {
+      if (res.status !== 'fulfilled') continue
+      const list = Array.isArray(res.value)
+        ? res.value
+        : res.value?.issues ?? res.value?.items ?? []
+      for (const raw of list) {
+        if (raw?.id && raw.id !== issueId && !byId.has(raw.id)) {
+          byId.set(raw.id, mapIssue(raw))
+        }
+      }
+    }
+
+    const tasks = Array.from(byId.values())
+    if (tasks.length === 0) return []
+
+    const commentsPerTask = await Promise.all(
+      tasks.slice(0, 12).map((t) => this.listIssueComments(t.id).catch(() => []))
+    )
+
+    return tasks.map((t, idx) => {
+      const taskComments = commentsPerTask[idx] ?? []
+      const sortedTaskComments = [...taskComments].sort((a, b) => {
+        const ta = a.createdAt ? Date.parse(a.createdAt) : 0
+        const tb = b.createdAt ? Date.parse(b.createdAt) : 0
+        if (Number.isNaN(ta) || Number.isNaN(tb)) return 0
+        return ta - tb
+      })
+      const agentReplies = sortedTaskComments.filter((c) => Boolean(c.authorAgentId))
+      const latest = agentReplies[agentReplies.length - 1] ?? sortedTaskComments[sortedTaskComments.length - 1]
+      return {
+        taskId: t.id,
+        identifier: t.identifier,
+        title: t.title,
+        status: t.status,
+        description: t.description ?? null,
+        fromAgentId: t.createdByAgentId ?? null,
+        toAgentId: t.assigneeAgentId ?? null,
+        toAgentName: t.assigneeAgentName,
+        toAgentRef: t.assigneeAgentRef,
+        latestReply: latest
+          ? {
+              authorAgentId: latest.authorAgentId ?? null,
+              content: latest.body ?? '',
+              timestamp: latest.createdAt ?? '',
+            }
+          : null,
+        commentCount: taskComments.length,
+        _createdAt: t.createdAt ?? '',
+      }
+    }) as Array<DelegationInfo & { _createdAt?: string }>
+  }
+
   private buildChatSessionResponse(
     issue: Issue,
     agentRef: string,
-    comments: IssueComment[]
+    comments: IssueComment[],
+    delegations: Array<DelegationInfo & { _createdAt?: string }> = []
   ): { session: ChatSession; messages: Message[] } {
     const messages: Message[] = []
     if (issue.description && issue.description.trim()) {
@@ -649,22 +719,40 @@ class ApiClient {
         isBriefing: true,
       })
     }
-    const orderedComments = [...comments].sort((a, b) => {
-      const ta = a.createdAt ? Date.parse(a.createdAt) : 0
-      const tb = b.createdAt ? Date.parse(b.createdAt) : 0
+
+    const timelineItems: Message[] = comments.map((c) => ({
+      id: c.id,
+      sessionId: issue.id,
+      role: c.authorAgentId ? 'assistant' : 'user',
+      kind: 'text',
+      content: c.body ?? '',
+      timestamp: c.createdAt ?? '',
+      authorAgentId: c.authorAgentId ?? null,
+    }))
+
+    for (const del of delegations) {
+      const { _createdAt, ...info } = del
+      timelineItems.push({
+        id: `delegation-${info.taskId}`,
+        sessionId: issue.id,
+        role: 'assistant',
+        kind: 'delegation',
+        content: info.title,
+        timestamp: _createdAt ?? '',
+        authorAgentId: info.fromAgentId ?? issue.assigneeAgentId ?? null,
+        delegation: info,
+      })
+    }
+
+    timelineItems.sort((a, b) => {
+      const ta = a.timestamp ? Date.parse(a.timestamp) : 0
+      const tb = b.timestamp ? Date.parse(b.timestamp) : 0
       if (Number.isNaN(ta) || Number.isNaN(tb)) return 0
       return ta - tb
     })
-    for (const c of orderedComments) {
-      messages.push({
-        id: c.id,
-        sessionId: issue.id,
-        role: c.authorAgentId ? 'assistant' : 'user',
-        content: c.body ?? '',
-        timestamp: c.createdAt ?? '',
-        authorAgentId: c.authorAgentId ?? null,
-      })
-    }
+
+    messages.push(...timelineItems)
+
     return {
       session: {
         id: issue.id,
@@ -695,14 +783,25 @@ class ApiClient {
     if (!targetIssue) {
       throw new Error('404: Nenhuma conversa encontrada')
     }
-    const comments = await this.listIssueComments(targetIssue.id).catch(() => [])
-    return this.buildChatSessionResponse(targetIssue, agentRef, comments)
+    const [comments, delegations] = await Promise.all([
+      this.listIssueComments(targetIssue.id).catch(() => []),
+      this.getDelegatedTasksWithReplies(companyId, targetIssue.id).catch(() => []),
+    ])
+    return this.buildChatSessionResponse(targetIssue, agentRef, comments, delegations)
   }
 
-  async getSessionByIssueId(issueId: string, agentRef: string): Promise<{ session: ChatSession; messages: Message[] }> {
+  async getSessionByIssueId(
+    issueId: string,
+    agentRef: string,
+    companyId?: string
+  ): Promise<{ session: ChatSession; messages: Message[] }> {
     const issue = await this.getIssue(issueId)
-    const comments = await this.listIssueComments(issueId).catch(() => [])
-    return this.buildChatSessionResponse(issue, agentRef, comments)
+    const effectiveCompanyId = companyId || issue.companyId
+    const [comments, delegations] = await Promise.all([
+      this.listIssueComments(issueId).catch(() => []),
+      this.getDelegatedTasksWithReplies(effectiveCompanyId, issueId).catch(() => []),
+    ])
+    return this.buildChatSessionResponse(issue, agentRef, comments, delegations)
   }
 
   async getChats(companyId: string, agentRef: string): Promise<ChatSession[]> {

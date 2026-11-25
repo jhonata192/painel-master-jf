@@ -15,6 +15,7 @@ import {
 import { cn, formatTimestamp } from '../lib/utils'
 import { api } from '../lib/api'
 import { useToastHelpers } from '../context/ToastContext'
+import { RunLogViewer } from './ChatView'
 import type { ActivityEvent, Agent, HeartbeatRun, Routine } from '../types/api'
 
 interface RoutinesViewProps {
@@ -471,24 +472,14 @@ export function RoutinesView({ companyId, agents }: RoutinesViewProps) {
                 <div className="text-caption text-tertiary">
                   Status: <strong>{logRun.status}</strong> • Tokens: {logRun.totalTokens ?? 0} • Custo: US$ {(logRun.costUsd ?? 0).toFixed(4)}
                 </div>
-                <div className="flex items-center gap-2">
-                  <button className="btn btn-secondary btn-sm" onClick={() => openRunLog(logRun)}>
-                    <RotateCcw size={13} /> Atualizar
-                  </button>
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => {
-                      navigator.clipboard?.writeText(logContent)
-                      success('Log copiado')
-                    }}
-                  >
-                    Copiar
-                  </button>
-                </div>
+                <button className="btn btn-secondary btn-sm" onClick={() => openRunLog(logRun)}>
+                  <RotateCcw size={13} /> Atualizar
+                </button>
               </div>
-              <pre className="log-console">
-                {loadingLog ? 'Carregando log...' : logContent}
-              </pre>
+              <RunLogViewer
+                rawLog={loadingLog ? '' : logContent}
+                emptyText={loadingLog ? 'Carregando log...' : 'Log vazio'}
+              />
             </div>
           </div>
         </div>

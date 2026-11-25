@@ -9,6 +9,8 @@ import {
   throttle,
   sleep,
   retry,
+  parseRunLog,
+  formatRunLogText,
 } from './utils'
 
 describe('utils', () => {
@@ -192,6 +194,59 @@ describe('utils', () => {
 
       await expect(retry(fn, 2, 10)).rejects.toThrow('fail')
       expect(fn).toHaveBeenCalledTimes(3)
+    })
+  })
+
+  describe('parseRunLog', () => {
+    it('parses Paperclip/OpenCode NDJSON into intuitive readable entries', () => {
+      const raw = [
+        JSON.stringify({
+          ts: '2026-11-25T12:28:38.217Z',
+          stream: 'stderr',
+          chunk: '[paperclip] Injected OpenCode skill "paperclipai/paperclip/paperclip" into /tmp/x/.claude/skills\n',
+        }),
+        JSON.stringify({
+          ts: '2026-11-25T12:29:00.559Z',
+          stream: 'stdout',
+          chunk: JSON.stringify({ type: 'step_start', timestamp: 1795609740558 }),
+        }),
+        JSON.stringify({
+          ts: '2026-11-25T12:29:04.480Z',
+          stream: 'stdout',
+          chunk: JSON.stringify({
+            type: 'tool_use',
+            part: {
+              tool: 'bash',
+              state: {
+                status: 'completed',
+                input: {
+                  command:
+                    'cd /paperclip/instances/default/projects/c65f4f1a-7314-4d4d-8194-bccea4a950c9/300dadda-f9d8-4e94-804c-3e26a33604cf/acessilia-ufg && git status',
+                },
+                output: 'On branch main',
+              },
+            },
+          }),
+        }),
+        JSON.stringify({
+          ts: '2026-11-25T12:30:08.270Z',
+          stream: 'stdout',
+          chunk: JSON.stringify({
+            type: 'step_finish',
+            part: { tokens: { total: 10608, input: 1697, output: 121, cache: { read: 8768 } } },
+          }),
+        }),
+      ].join('\n')
+
+      const entries = parseRunLog(raw)
+      expect(entries.map((e) => e.title)).toEqual([
+        'Skill carregada: paperclipai/paperclip/paperclip',
+        'Comando: git status',
+        'Passo concluído',
+      ])
+      expect(entries[1].detail).toContain('On branch main')
+      expect(entries[2].detail).toContain('10.608 tokens')
+      expect(formatRunLogText(entries)).toContain('Comando: git status')
     })
   })
 })

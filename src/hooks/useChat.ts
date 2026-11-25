@@ -47,7 +47,7 @@ export function useChat({ companyId, agentRef, onNewMessage }: UseChatOptions) {
       if (!issueId) return
       try {
         setLoading(true)
-        const data = await api.getSessionByIssueId(issueId, agentRef)
+        const data = await api.getSessionByIssueId(issueId, agentRef, companyId)
         setSession(data.session)
         setMessages(data.messages)
         setSubject(data.session.subject)
@@ -59,7 +59,7 @@ export function useChat({ companyId, agentRef, onNewMessage }: UseChatOptions) {
         setLoading(false)
       }
     },
-    [agentRef]
+    [agentRef, companyId]
   )
 
   const createNewSession = useCallback(
@@ -148,7 +148,7 @@ export function useChat({ companyId, agentRef, onNewMessage }: UseChatOptions) {
   const refreshSession = useCallback(async () => {
     if (!companyId || !agentRef || !session) return
     try {
-      const data = await api.getSessionByIssueId(session.id, agentRef)
+      const data = await api.getSessionByIssueId(session.id, agentRef, companyId)
       setMessages(data.messages)
       setSession(data.session)
       setSubject(data.session.subject)

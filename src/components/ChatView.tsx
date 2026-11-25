@@ -17,8 +17,10 @@ import {
   XCircle,
   FolderKanban,
   X,
+  ArrowRight,
+  GitBranch,
 } from 'lucide-react'
-import { cn, formatTime, getInitials, getAgentColor } from '../lib/utils'
+import { cn, formatTime, getInitials, getAgentColor, parseRunLog, formatRunLogText } from '../lib/utils'
 import { api } from '../lib/api'
 import { useChat, useChats } from '../hooks/useChat'
 import type { Agent, HeartbeatRun, Message, Project } from '../types/api'
@@ -778,9 +780,116 @@ export function ChatView({ agent, companyId, agents = [], onSelectAgent, onNewMe
                   <Square size={12} /> Parar Execução
                 </button>
               </div>
-              <pre className="log-console">{liveLogText || 'Aguardando logs...'}</pre>
+              <RunLogViewer rawLog={liveLogText} emptyText="Aguardando logs..." />
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function RunLogViewer({
+  rawLog,
+  emptyText = 'Nenhum log disponível.',
+}: {
+  rawLog: string
+  emptyText?: string
+}) {
+  const [showRaw, setShowRaw] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const entries = parseRunLog(rawLog)
+
+  const handleCopy = () => {
+    const text = showRaw ? rawLog : entries.length > 0 ? formatRunLogText(entries) : rawLog
+    navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1800)
+    }).catch(() => {})
+  }
+
+  return (
+    <div className="stack-sm">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <span className="text-caption text-tertiary">
+          {showRaw
+            ? 'Exibindo saída bruta (JSON)'
+            : entries.length > 0
+              ? `${entries.length} evento(s) traduzidos para leitura`
+              : emptyText}
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => setShowRaw((prev) => !prev)}
+          >
+            {showRaw ? 'Ver resumo intuitivo' : 'Ver JSON bruto'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={handleCopy}
+            disabled={!rawLog.trim()}
+          >
+            {copied ? <Check size={13} className="text-success" /> : <Copy size={13} />}
+            {copied ? 'Copiado' : 'Copiar'}
+          </button>
+        </div>
+      </div>
+
+      {showRaw || entries.length === 0 ? (
+        <pre className="log-console">{rawLog || emptyText}</pre>
+      ) : (
+        <div
+          className="stack-xs"
+          role="log"
+          aria-label="Resumo intuitivo dos logs de execução"
+          style={{ maxHeight: '420px', overflowY: 'auto', paddingRight: '4px' }}
+        >
+          {entries.map((entry) => {
+            const borderColor =
+              entry.kind === 'error'
+                ? 'var(--color-status-error)'
+                : entry.kind === 'text'
+                  ? 'var(--color-status-success)'
+                  : entry.kind === 'tool'
+                    ? 'var(--color-brand-primary)'
+                    : 'var(--color-border-default)'
+            return (
+              <div
+                key={entry.id}
+                className="p-2"
+                style={{
+                  borderLeft: `3px solid ${borderColor}`,
+                  backgroundColor: 'var(--color-bg-surface-elevated)',
+                  borderRadius: '6px',
+                  fontSize: '0.8125rem',
+                }}
+              >
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <strong style={{ fontWeight: 600, wordBreak: 'break-word' }}>{entry.title}</strong>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {entry.status === 'error' && <span className="badge badge-error">erro</span>}
+                    {entry.time && <span className="text-caption text-tertiary text-mono">{entry.time}</span>}
+                  </div>
+                </div>
+                {entry.detail && (
+                  <pre
+                    className="text-caption text-secondary text-mono mt-1"
+                    style={{
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      margin: 0,
+                      fontFamily: entry.kind === 'text' || entry.kind === 'reasoning' ? 'inherit' : undefined,
+                    }}
+                  >
+                    {entry.detail}
+                  </pre>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
     </div>
@@ -796,12 +905,128 @@ interface MessageBubbleProps {
   isSending: boolean
 }
 
+const DELEGATION_STATUS_LABELS: Record<string, string> = {
+  backlog: 'Backlog',
+  todo: 'A fazer',
+  in_progress: 'Em andamento',
+  in_review: 'Em revisão',
+  done: 'Concluída',
+  blocked: 'Bloqueada',
+  cancelled: 'Cancelada',
+}
+
 function MessageBubble({ message, agent, agents, onSelectAgent, isOwn, isSending }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false)
   const authorAgent = message.authorAgentId
     ? agents.find((a) => a.id === message.authorAgentId) ?? agent
     : agent
   const isOtherAgent = Boolean(message.authorAgentId && message.authorAgentId !== agent.id)
+
+  if (message.kind === 'delegation' && message.delegation) {
+    const del = message.delegation
+    const toAgent = del.toAgentId ? agents.find((a) => a.id === del.toAgentId) ?? null : null
+    const toName = toAgent?.name ?? del.toAgentName ?? 'outro agente'
+    const toRef = toAgent?.ref ?? del.toAgentRef
+    const statusLabel = DELEGATION_STATUS_LABELS[del.status] ?? del.status
+    const statusBadgeClass =
+      del.status === 'done'
+        ? 'badge-success'
+        : del.status === 'in_progress' || del.status === 'in_review'
+          ? 'badge-info'
+          : del.status === 'blocked'
+            ? 'badge-error'
+            : 'badge-neutral'
+
+    return (
+      <div className="message-bubble">
+        <div
+          className="avatar avatar-sm flex-shrink-0"
+          style={{ backgroundColor: getAgentColor(authorAgent.ref) }}
+          aria-hidden="true"
+        >
+          {authorAgent.avatar ? <img src={authorAgent.avatar} alt="" /> : getInitials(authorAgent.name)}
+        </div>
+        <div className="message-bubble__content" style={{ flex: 1 }}>
+          <article
+            className="card stack-sm"
+            aria-label={`Delegação de ${authorAgent.name} para ${toName}: ${del.title}`}
+            style={{
+              borderLeft: '3px solid var(--color-brand-primary)',
+              backgroundColor: 'var(--color-bg-surface-elevated)',
+            }}
+          >
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 flex-wrap text-caption">
+                <GitBranch size={13} style={{ color: 'var(--color-brand-primary)' }} aria-hidden="true" />
+                <strong>{authorAgent.name}</strong>
+                <ArrowRight size={12} aria-hidden="true" />
+                <strong>{toName}</strong>
+                {del.identifier && (
+                  <span className="badge badge-neutral text-mono" style={{ fontSize: '10px' }}>
+                    {del.identifier}
+                  </span>
+                )}
+              </div>
+              <span className={cn('badge', statusBadgeClass)} style={{ fontSize: '11px' }}>
+                {statusLabel}
+              </span>
+            </div>
+
+            <div className="text-body-sm" style={{ fontWeight: 600 }}>
+              {del.title}
+            </div>
+
+            {del.description && (
+              <p className="text-caption text-secondary" style={{ whiteSpace: 'pre-wrap' }}>
+                {del.description.length > 260
+                  ? `${del.description.slice(0, 260).trimEnd()}...`
+                  : del.description}
+              </p>
+            )}
+
+            {del.latestReply && (
+              <div
+                className="p-2 text-caption"
+                style={{
+                  backgroundColor: 'var(--color-bg-surface)',
+                  borderRadius: '6px',
+                  border: '1px solid var(--color-border-subtle)',
+                }}
+              >
+                <div className="text-tertiary mb-1" style={{ fontWeight: 600 }}>
+                  Última atualização de {toName}
+                  {typeof del.commentCount === 'number' && del.commentCount > 1
+                    ? ` (${del.commentCount} comentários)`
+                    : ''}
+                  :
+                </div>
+                <div className="text-secondary" style={{ whiteSpace: 'pre-wrap' }}>
+                  {del.latestReply.content.length > 320
+                    ? `${del.latestReply.content.slice(0, 320).trimEnd()}...`
+                    : del.latestReply.content}
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <time className="text-caption text-tertiary" dateTime={message.timestamp}>
+                {formatTime(message.timestamp)}
+              </time>
+              {toRef && onSelectAgent && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => onSelectAgent(toRef)}
+                >
+                  Abrir conversa de {toName.split(' ')[0]}
+                </button>
+              )}
+            </div>
+          </article>
+        </div>
+      </div>
+    )
+  }
 
   const handleCopy = () => {
     navigator.clipboard?.writeText(message.content).then(() => {
