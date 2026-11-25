@@ -312,5 +312,32 @@ describe('utils', () => {
       expect(entries[0].detail).toContain('⏳ Update classes.ejs modal')
       expect(entries[0].detail).toContain('○ Run tests')
     })
+
+    it('labels internal OpenCode task calls clearly as Subagente interno (OpenCode)', () => {
+      const raw = JSON.stringify({
+        ts: '2026-11-25T16:47:52.000Z',
+        stream: 'stdout',
+        chunk:
+          JSON.stringify({
+            type: 'tool_use',
+            part: {
+              tool: 'task',
+              state: {
+                status: 'completed',
+                input: {
+                  description: 'RH: Avaliar contratação',
+                  prompt: 'Como Camila...',
+                },
+                output: 'Parecer gerado internamente.',
+              },
+            },
+          }) + '\n',
+      })
+
+      const entries = parseRunLog(raw)
+      expect(entries).toHaveLength(1)
+      expect(entries[0].title).toBe('Subagente interno (OpenCode): RH: Avaliar contratação')
+      expect(entries[0].detail).toBe('Parecer gerado internamente.')
+    })
   })
 })

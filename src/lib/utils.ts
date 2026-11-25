@@ -385,6 +385,29 @@ export function parseRunLog(raw: string): FormattedRunLogEntry[] {
           return
         }
 
+        if (toolName === 'task') {
+          const desc = cleanLogString(String(input.description || input.title || '')).trim()
+          const detailRaw =
+            status === 'error'
+              ? state.error
+              : typeof state.output === 'string' && state.output.trim()
+                ? state.output
+                : typeof input.prompt === 'string' && input.prompt.trim()
+                  ? input.prompt
+                  : ''
+          entries.push({
+            id: `log-${idx}`,
+            time: eventTime,
+            kind: status === 'error' ? 'error' : 'tool',
+            status,
+            title: desc
+              ? `Subagente interno (OpenCode): ${truncateLogText(desc, 140)}`
+              : 'Subagente interno (OpenCode)',
+            detail: detailRaw ? truncateLogText(String(detailRaw)) : undefined,
+          })
+          return
+        }
+
         const inputSummary =
           typeof input.title === 'string'
             ? input.title
