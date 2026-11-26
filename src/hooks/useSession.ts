@@ -1,17 +1,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { api } from '../lib/api'
+import { api, PaperclipApiError } from '../lib/api'
 import type { SessionData, Agent, Company, SidebarBadges } from '../types/api'
 
-const DEFAULT_COMPANY_ID = 'c65f4f1a-7314-4d4d-8194-bccea4a950c9'
+const ACTIVE_COMPANY_KEY = 'painel_active_company_id'
 
 export function useSession() {
   const [session, setSession] = useState<SessionData | null>(null)
   const [companies, setCompanies] = useState<Company[]>([])
   const [activeCompanyId, setActiveCompanyId] = useState<string>(() => {
     try {
-      return localStorage.getItem('painel_active_company_id') || DEFAULT_COMPANY_ID
+      return localStorage.getItem(ACTIVE_COMPANY_KEY) || ''
     } catch {
-      return DEFAULT_COMPANY_ID
+      return ''
     }
   })
   const [loading, setLoading] = useState(true)
@@ -23,21 +23,30 @@ export function useSession() {
   const fetchSession = useCallback(async () => {
     try {
       if (!hasLoadedRef.current) setLoading(true)
-      const [raw, companyList] = await Promise.all([
-        api.getSession(),
+      const raw = await api.getSession()
+      const [companyList, isAdmin] = await Promise.all([
         api.listCompanies().catch(() => [] as Company[]),
+        api
+          .listAdminUsers('')
+          .then(() => true)
+          .catch(() => false),
       ])
 
-      const resolvedCompanies =
-        companyList.length > 0
-          ? companyList
-          : [{ id: DEFAULT_COMPANY_ID, name: 'Master JF Soluções Digitais' }]
-
-      setCompanies(resolvedCompanies)
+      setCompanies(companyList)
 
       const selectedCompany =
-        resolvedCompanies.find((c) => c.id === activeCompanyIdRef.current) ||
-        resolvedCompanies[0]
+        companyList.find((c) => c.id === activeCompanyIdRef.current) ||
+        companyList[0] ||
+        null
+
+      if (selectedCompany && selectedCompany.id !== activeCompanyIdRef.current) {
+        setActiveCompanyId(selectedCompany.id)
+        try {
+          localStorage.setItem(ACTIVE_COMPANY_KEY, selectedCompany.id)
+        } catch {
+          // ignore storage errors
+        }
+      }
 
       const adapted: SessionData = {
         ...(raw as any),
@@ -46,14 +55,22 @@ export function useSession() {
           name: (raw as any).user?.name ?? 'Usuário',
           email: (raw as any).user?.email ?? '',
           avatar: (raw as any).user?.image ?? null,
+          isInstanceAdmin: isAdmin,
         },
-        company: selectedCompany,
+        company: selectedCompany as Company,
       }
       hasLoadedRef.current = true
       setSession(adapted)
       setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err : new Error('Erro ao carregar sessão'))
+      if (err instanceof PaperclipApiError && err.status === 401) {
+        hasLoadedRef.current = false
+        setSession(null)
+        setCompanies([])
+        setError(null)
+      } else {
+        setError(err instanceof Error ? err : new Error('Erro ao carregar sessão'))
+      }
     } finally {
       setLoading(false)
     }
@@ -62,7 +79,20 @@ export function useSession() {
   const switchCompany = useCallback((companyId: string) => {
     setActiveCompanyId(companyId)
     try {
-      localStorage.setItem('painel_active_company_id', companyId)
+      localStorage.setItem(ACTIVE_COMPANY_KEY, companyId)
+    } catch {
+      // ignore storage errors
+    }
+  }, [])
+
+  const signOut = useCallback(async () => {
+    await api.signOut().catch(() => {})
+    hasLoadedRef.current = false
+    setSession(null)
+    setCompanies([])
+    setActiveCompanyId('')
+    try {
+      localStorage.removeItem(ACTIVE_COMPANY_KEY)
     } catch {
       // ignore storage errors
     }
@@ -76,7 +106,7 @@ export function useSession() {
     setSession((prev) => {
       if (!prev) return prev
       const nextCompany = companies.find((c) => c.id === activeCompanyId)
-      if (!nextCompany || (prev.company.id === nextCompany.id && prev.company.name === nextCompany.name)) {
+      if (!nextCompany || (prev.company?.id === nextCompany.id && prev.company?.name === nextCompany.name)) {
         return prev
       }
       return { ...prev, company: nextCompany }
@@ -87,6 +117,7 @@ export function useSession() {
     session,
     companies,
     switchCompany,
+    signOut,
     loading,
     error,
     refetch: fetchSession,

@@ -617,12 +617,51 @@ export interface SessionData {
     name: string
     email: string
     avatar?: string | null
+    isInstanceAdmin?: boolean
   }
   company: Company
   boardBootstrap?: {
     agents: Agent[]
     currentAgent?: Agent
   }
+}
+
+export interface AdminUser {
+  id: string
+  email: string | null
+  name: string | null
+  image?: string | null
+  isInstanceAdmin: boolean
+  activeCompanyMembershipCount: number
+}
+
+export interface UserCompanyAccessItem {
+  id: string
+  companyId: string
+  principalType: string
+  principalId: string
+  status: string
+  membershipRole: string | null
+  companyName: string | null
+  companyStatus: string | null
+}
+
+export interface UserCompanyAccessResponse {
+  user: {
+    id: string
+    email: string | null
+    name: string | null
+    image?: string | null
+    isInstanceAdmin: boolean
+  }
+  companyAccess: UserCompanyAccessItem[]
+}
+
+export interface CreateCompanyAccountInput {
+  name: string
+  email: string
+  password: string
+  companyIds: string[]
 }
 
 export interface ChatResponse {

@@ -1,5 +1,6 @@
 import type {
   ActivityEvent,
+  AdminUser,
   Agent,
   AgentApiKey,
   AiConnection,
@@ -18,6 +19,7 @@ import type {
   CostByProvider,
   CostsSummary,
   CreateApprovalRequest,
+  CreateCompanyAccountInput,
   DashboardSummary,
   DecisionItem,
   DelegationInfo,
@@ -44,6 +46,7 @@ import type {
   SessionData,
   SidebarBadges,
   UpdateApprovalRequest,
+  UserCompanyAccessResponse,
 } from '../types/api'
 
 const API_BASE = '/api'
@@ -160,6 +163,7 @@ class ApiClient {
       : { 'Content-Type': 'application/json', ...(options.headers as Record<string, string> | undefined) }
 
     const response = await fetch(url, {
+      credentials: 'include',
       ...options,
       headers,
     })
@@ -200,8 +204,83 @@ class ApiClient {
     return this.request<SessionData>('/auth/get-session')
   }
 
+  async signIn(email: string, password: string): Promise<unknown> {
+    return this.request('/auth/sign-in/email', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    })
+  }
+
+  async signOut(): Promise<void> {
+    await this.request('/auth/sign-out', {
+      method: 'POST',
+      body: '{}',
+    })
+  }
+
+  async listAdminUsers(query = ''): Promise<AdminUser[]> {
+    const qs = query.trim() ? `?query=${encodeURIComponent(query.trim())}` : ''
+    return this.request<AdminUser[]>(`/admin/users${qs}`)
+  }
+
+  async getUserCompanyAccess(userId: string): Promise<UserCompanyAccessResponse> {
+    return this.request<UserCompanyAccessResponse>(`/admin/users/${encodeURIComponent(userId)}/company-access`)
+  }
+
+  async setUserCompanyAccess(userId: string, companyIds: string[]): Promise<UserCompanyAccessResponse> {
+    return this.request<UserCompanyAccessResponse>(`/admin/users/${encodeURIComponent(userId)}/company-access`, {
+      method: 'PUT',
+      body: JSON.stringify({ companyIds }),
+    })
+  }
+
+  async promoteInstanceAdmin(userId: string): Promise<unknown> {
+    return this.request(`/admin/users/${encodeURIComponent(userId)}/promote-instance-admin`, {
+      method: 'POST',
+      body: '{}',
+    })
+  }
+
+  async demoteInstanceAdmin(userId: string): Promise<unknown> {
+    return this.request(`/admin/users/${encodeURIComponent(userId)}/demote-instance-admin`, {
+      method: 'POST',
+      body: '{}',
+    })
+  }
+
+  async createCompanyAccount(input: CreateCompanyAccountInput): Promise<UserCompanyAccessResponse> {
+    // credentials: 'omit' garante que a criação da nova conta não sobrescreva o cookie da sessão do administrador
+    const created = await this.request<{ user?: { id?: string } }>('/auth/sign-up/email', {
+      method: 'POST',
+      credentials: 'omit',
+      body: JSON.stringify({
+        name: input.name,
+        email: input.email,
+        password: input.password,
+      }),
+    })
+    const createdUserId = created?.user?.id
+    if (!createdUserId) {
+      throw new PaperclipApiError({
+        code: 'USER_CREATE_INVALID_RESPONSE',
+        message: 'Conta criada sem identificador de usuário retornado.',
+        status: 500,
+      })
+    }
+    try {
+      return await this.setUserCompanyAccess(createdUserId, input.companyIds)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Falha ao vincular empresas'
+      throw new PaperclipApiError({
+        code: 'USER_COMPANY_ACCESS_FAILED',
+        message: `Conta criada, mas falhou ao vincular empresas (${msg}). Edite o acesso na lista abaixo.`,
+        status: 500,
+      })
+    }
+  }
+
   async listCompanies(): Promise<Company[]> {
-    return this.request<Company[]>('/companies')
+    return this.request<Company[]>('/companies?scope=accessible')
   }
 
   async getCompany(companyId: string): Promise<Company> {

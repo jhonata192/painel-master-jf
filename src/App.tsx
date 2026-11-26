@@ -14,6 +14,7 @@ import {
   Search,
   Radio,
   XCircle,
+  LogOut,
 } from 'lucide-react'
 import { Sidebar } from './components/Sidebar'
 import { DashboardView } from './components/DashboardView'
@@ -25,6 +26,7 @@ import { ProjectsView } from './components/ProjectsView'
 import { RoutinesView } from './components/RoutinesView'
 import { CostsView } from './components/CostsView'
 import { SettingsView } from './components/SettingsView'
+import { LoginView } from './components/LoginView'
 import { useSession, useAgents, useSidebarBadges } from './hooks/useSession'
 import { usePaperclipLive } from './hooks/usePaperclipLive'
 import { ToastProvider } from './context/ToastContext'
@@ -88,6 +90,7 @@ function AppContent() {
     session,
     companies,
     switchCompany,
+    signOut,
     loading: sessionLoading,
     error: sessionError,
     refetch: refetchSession,
@@ -132,6 +135,14 @@ function AppContent() {
   }, [refetchBadges, refetchAgents])
 
   const { connected: wsConnected } = usePaperclipLive(companyId, handleLiveEvent)
+
+  const handleSignOut = useCallback(async () => {
+    await signOut()
+    setActiveAgentRef(null)
+    setSelectedTaskId(null)
+    setNotifications([])
+    setActiveView('dashboard')
+  }, [signOut])
 
   const handleSwitchCompany = useCallback(
     (nextCompanyId: string) => {
@@ -283,17 +294,24 @@ function AppContent() {
     )
   }
 
-  if (!session || !companyId) {
+  if (!session) {
+    return <LoginView onLoginSuccess={refetchSession} />
+  }
+
+  if (!companyId) {
     return (
       <div className="app-no-session">
-        <div className="empty-state" style={{ maxWidth: '420px' }}>
-          <h3 className="empty-state__title">Sessão não encontrada</h3>
+        <div className="empty-state" style={{ maxWidth: '440px' }}>
+          <h3 className="empty-state__title">Nenhuma empresa vinculada</h3>
           <p className="empty-state__description">
-            Não foi possível obter a sessão do board no Paperclip.
+            Sua conta ({session.user.email || session.user.name}) ainda não possui acesso a nenhuma empresa. Solicite ao administrador o vínculo da sua conta.
           </p>
-          <div className="empty-state__action">
-            <button className="btn btn-primary" onClick={() => refetchSession()}>
-              Tentar Novamente
+          <div className="empty-state__action flex gap-2 justify-center">
+            <button className="btn btn-secondary" onClick={() => refetchSession()}>
+              Atualizar
+            </button>
+            <button className="btn btn-primary" onClick={handleSignOut}>
+              <LogOut size={16} aria-hidden="true" /> Sair da Conta
             </button>
           </div>
         </div>
@@ -458,6 +476,15 @@ function AppContent() {
           >
             <Settings size={20} />
           </button>
+
+          <button
+            className="btn btn-ghost btn-icon"
+            aria-label="Sair da conta"
+            title="Sair da conta"
+            onClick={handleSignOut}
+          >
+            <LogOut size={19} />
+          </button>
         </div>
       </header>
 
@@ -604,6 +631,8 @@ function AppContent() {
               <SettingsView
                 company={session.company}
                 companies={companies}
+                isInstanceAdmin={Boolean(session.user.isInstanceAdmin)}
+                currentUserId={currentUserId}
                 onSwitchCompany={handleSwitchCompany}
                 onCompanyUpdated={refetchSession}
               />

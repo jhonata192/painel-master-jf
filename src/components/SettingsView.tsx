@@ -10,11 +10,14 @@ import {
   Trash2,
   RotateCcw,
   RefreshCw,
+  Users,
+  Shield,
 } from 'lucide-react'
 import { cn, formatTimestamp } from '../lib/utils'
 import { api } from '../lib/api'
 import { useToastHelpers } from '../context/ToastContext'
 import type {
+  AdminUser,
   AiConnection,
   Company,
   CompanySecret,
@@ -26,15 +29,19 @@ import type {
 interface SettingsViewProps {
   company: Company
   companies?: Company[]
+  isInstanceAdmin?: boolean
+  currentUserId?: string
   onSwitchCompany?: (companyId: string) => void
   onCompanyUpdated: () => Promise<void> | void
 }
 
-type SettingsTab = 'ai' | 'secrets' | 'skills' | 'labels' | 'company'
+type SettingsTab = 'ai' | 'secrets' | 'skills' | 'labels' | 'company' | 'accounts'
 
 export function SettingsView({
   company,
   companies = [],
+  isInstanceAdmin = false,
+  currentUserId,
   onSwitchCompany,
   onCompanyUpdated,
 }: SettingsViewProps) {
@@ -67,15 +74,28 @@ export function SettingsView({
   const [health, setHealth] = useState<HealthStatus | null>(null)
   const [instanceSettings, setInstanceSettings] = useState<Record<string, unknown> | null>(null)
 
+  // Admin Accounts & Company Access
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([])
+  const [userQuery, setUserQuery] = useState('')
+  const [accName, setAccName] = useState('')
+  const [accEmail, setAccEmail] = useState('')
+  const [accPassword, setAccPassword] = useState('')
+  const [accCompanyIds, setAccCompanyIds] = useState<string[]>(() => (company.id ? [company.id] : []))
+  const [creatingAccount, setCreatingAccount] = useState(false)
+  const [editingUserId, setEditingUserId] = useState<string | null>(null)
+  const [editingCompanyIds, setEditingCompanyIds] = useState<string[]>([])
+  const [savingAccess, setSavingAccess] = useState(false)
+
   const loadAll = useCallback(async () => {
     try {
-      const [ai, sec, sk, lb, h, inst] = await Promise.all([
+      const [ai, sec, sk, lb, h, inst, usersList] = await Promise.all([
         api.listAiConnections(company.id).catch(() => ({ connections: [] })),
         api.listSecrets(company.id).catch(() => []),
         api.listSkills(company.id).catch(() => []),
         api.listLabels(company.id).catch(() => []),
         api.getHealth().catch(() => null),
         api.getInstanceSettings().catch(() => null),
+        isInstanceAdmin ? api.listAdminUsers(userQuery).catch(() => []) : Promise.resolve([]),
       ])
       setConnections(ai.connections ?? [])
       setSecrets(sec)
@@ -83,10 +103,11 @@ export function SettingsView({
       setLabels(lb)
       setHealth(h)
       setInstanceSettings(inst)
+      if (isInstanceAdmin) setAdminUsers(usersList)
     } catch {
       // ignore
     }
-  }, [company.id])
+  }, [company.id, isInstanceAdmin, userQuery])
 
   useEffect(() => {
     setCompName(company.name)
@@ -220,6 +241,90 @@ export function SettingsView({
 
   const availableCompanies = companies.length > 0 ? companies : [company]
 
+  const toggleCompanySelection = (list: string[], id: string) =>
+    list.includes(id) ? list.filter((item) => item !== id) : [...list, id]
+
+  const handleCreateAccount = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!accName.trim() || !accEmail.trim() || accPassword.length < 8) {
+      showError('Dados inválidos', 'Informe nome, e-mail válido e senha com pelo menos 8 caracteres.')
+      return
+    }
+    if (accCompanyIds.length === 0) {
+      showError('Selecione uma empresa', 'Atribua pelo menos uma empresa para a nova conta.')
+      return
+    }
+    setCreatingAccount(true)
+    try {
+      await api.createCompanyAccount({
+        name: accName.trim(),
+        email: accEmail.trim(),
+        password: accPassword,
+        companyIds: accCompanyIds,
+      })
+      setAccName('')
+      setAccEmail('')
+      setAccPassword('')
+      success('Conta criada e vinculada à(s) empresa(s)')
+      setAdminUsers(await api.listAdminUsers(userQuery).catch(() => []))
+    } catch (err) {
+      showError('Erro ao criar conta', err instanceof Error ? err.message : 'Falha')
+      setAdminUsers(await api.listAdminUsers(userQuery).catch(() => []))
+    } finally {
+      setCreatingAccount(false)
+    }
+  }
+
+  const handleOpenEditAccess = async (userId: string) => {
+    if (editingUserId === userId) {
+      setEditingUserId(null)
+      return
+    }
+    try {
+      const access = await api.getUserCompanyAccess(userId)
+      const activeIds = access.companyAccess
+        .filter((item) => item.status === 'active')
+        .map((item) => item.companyId)
+      setEditingCompanyIds(activeIds)
+      setEditingUserId(userId)
+    } catch (err) {
+      showError('Erro ao carregar empresas da conta', err instanceof Error ? err.message : 'Falha')
+    }
+  }
+
+  const handleSaveUserAccess = async (userId: string) => {
+    setSavingAccess(true)
+    try {
+      await api.setUserCompanyAccess(userId, editingCompanyIds)
+      success('Acesso às empresas atualizado')
+      setEditingUserId(null)
+      setAdminUsers(await api.listAdminUsers(userQuery).catch(() => []))
+      if (userId === currentUserId) {
+        await onCompanyUpdated()
+      }
+    } catch (err) {
+      showError('Erro ao atualizar acessos', err instanceof Error ? err.message : 'Falha')
+    } finally {
+      setSavingAccess(false)
+    }
+  }
+
+  const handleToggleAdmin = async (user: AdminUser) => {
+    if (user.id === currentUserId && user.isInstanceAdmin) return
+    try {
+      if (user.isInstanceAdmin) {
+        await api.demoteInstanceAdmin(user.id)
+        success(`Privilégio de admin removido de ${user.name || user.email}`)
+      } else {
+        await api.promoteInstanceAdmin(user.id)
+        success(`${user.name || user.email} promovido a admin global`)
+      }
+      setAdminUsers(await api.listAdminUsers(userQuery).catch(() => []))
+    } catch (err) {
+      showError('Erro ao alterar papel global', err instanceof Error ? err.message : 'Falha')
+    }
+  }
+
   return (
     <div className="view-shell">
       <div className="view-header">
@@ -246,6 +351,11 @@ export function SettingsView({
           <button role="tab" className={cn('tab', tab === 'company' && 'active')} aria-selected={tab === 'company'} onClick={() => setTab('company')}>
             <Building2 size={14} /> Empresa & Servidor
           </button>
+          {isInstanceAdmin && (
+            <button role="tab" className={cn('tab', tab === 'accounts' && 'active')} aria-selected={tab === 'accounts'} onClick={() => setTab('accounts')}>
+              <Users size={14} /> Contas & Acessos ({adminUsers.length})
+            </button>
+          )}
         </div>
       </div>
 
@@ -492,13 +602,15 @@ export function SettingsView({
               </div>
             </form>
 
-            <form onSubmit={handleCreateCompany} className="card flex items-end gap-3 flex-wrap">
-              <div className="flex-1">
-                <label htmlFor="new-comp" className="label">Criar Nova Empresa</label>
-                <input id="new-comp" className="input-base" value={newCompName} onChange={(e) => setNewCompName(e.target.value)} placeholder="Nome da nova empresa..." />
-              </div>
-              <button type="submit" className="btn btn-secondary"><Plus size={16} /> Criar Empresa</button>
-            </form>
+            {isInstanceAdmin && (
+              <form onSubmit={handleCreateCompany} className="card flex items-end gap-3 flex-wrap">
+                <div className="flex-1">
+                  <label htmlFor="new-comp" className="label">Criar Nova Empresa</label>
+                  <input id="new-comp" className="input-base" value={newCompName} onChange={(e) => setNewCompName(e.target.value)} placeholder="Nome da nova empresa..." />
+                </div>
+                <button type="submit" className="btn btn-secondary"><Plus size={16} /> Criar Empresa</button>
+              </form>
+            )}
 
             <section className="card stack-sm" aria-labelledby="server-health-title">
               <h3 id="server-health-title" className="text-body flex items-center gap-2" style={{ fontWeight: 600 }}>
@@ -511,6 +623,196 @@ export function SettingsView({
                 <pre className="log-console" style={{ maxHeight: '220px' }}>
                   {JSON.stringify(instanceSettings, null, 2)}
                 </pre>
+              )}
+            </section>
+          </div>
+        )}
+
+        {tab === 'accounts' && isInstanceAdmin && (
+          <div className="stack-lg">
+            <form onSubmit={handleCreateAccount} className="card stack-md" aria-labelledby="create-account-title">
+              <h3 id="create-account-title" className="text-body flex items-center gap-2" style={{ fontWeight: 600 }}>
+                <Users size={16} aria-hidden="true" /> Criar Nova Conta de Usuário
+              </h3>
+              <p className="text-caption text-secondary">
+                Somente administradores podem criar contas e definir exatamente quais empresas cada conta acessa.
+              </p>
+
+              <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+                <div>
+                  <label htmlFor="acc-name" className="label">Nome</label>
+                  <input
+                    id="acc-name"
+                    className="input-base"
+                    value={accName}
+                    onChange={(e) => setAccName(e.target.value)}
+                    placeholder="Ex.: Maria Cliente"
+                    required
+                  />
+                </div>
+                <div>
+                  <label htmlFor="acc-email" className="label">E-mail</label>
+                  <input
+                    id="acc-email"
+                    type="email"
+                    className="input-base"
+                    value={accEmail}
+                    onChange={(e) => setAccEmail(e.target.value)}
+                    placeholder="maria@empresa.com.br"
+                    required
+                  />
+                </div>
+                <div>
+                  <label htmlFor="acc-password" className="label">Senha inicial (mín. 8 caracteres)</label>
+                  <input
+                    id="acc-password"
+                    type="password"
+                    minLength={8}
+                    className="input-base"
+                    value={accPassword}
+                    onChange={(e) => setAccPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="stack-xs">
+                <span className="label">Empresas permitidas para esta conta</span>
+                <div className="flex flex-wrap gap-3">
+                  {availableCompanies.map((c) => (
+                    <label key={c.id} className="flex items-center gap-2 text-body-sm" style={{ cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={accCompanyIds.includes(c.id)}
+                        onChange={() => setAccCompanyIds((prev) => toggleCompanySelection(prev, c.id))}
+                      />
+                      <span>{c.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <button type="submit" className="btn btn-primary btn-sm" disabled={creatingAccount}>
+                  <Plus size={15} aria-hidden="true" />
+                  {creatingAccount ? 'Criando conta...' : 'Criar Conta'}
+                </button>
+              </div>
+            </form>
+
+            <section className="card stack-md" aria-labelledby="users-list-title">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <h3 id="users-list-title" className="text-body flex items-center gap-2" style={{ fontWeight: 600 }}>
+                  <Shield size={16} aria-hidden="true" /> Contas Cadastradas ({adminUsers.length})
+                </h3>
+                <input
+                  type="search"
+                  className="input-base"
+                  style={{ width: 'auto', minWidth: '220px' }}
+                  placeholder="Filtrar por nome ou e-mail..."
+                  value={userQuery}
+                  onChange={(e) => setUserQuery(e.target.value)}
+                  aria-label="Filtrar contas cadastradas"
+                />
+              </div>
+
+              {adminUsers.length === 0 ? (
+                <p className="text-body-sm text-tertiary">Nenhuma conta encontrada.</p>
+              ) : (
+                <div className="stack-sm">
+                  {adminUsers.map((u) => {
+                    const isEditing = editingUserId === u.id
+                    return (
+                      <div
+                        key={u.id}
+                        className="stack-sm"
+                        style={{
+                          padding: '12px',
+                          borderRadius: '8px',
+                          border: '1px solid var(--color-border-default)',
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <strong className="text-body-sm">{u.name || u.email || u.id}</strong>
+                              <span className={cn('badge', u.isInstanceAdmin ? 'badge-brand' : 'badge-neutral')}>
+                                {u.isInstanceAdmin ? 'Admin Global' : 'Usuário de Empresa'}
+                              </span>
+                              <span className="badge badge-neutral">
+                                {u.activeCompanyMembershipCount}{' '}
+                                {u.activeCompanyMembershipCount === 1 ? 'empresa' : 'empresas'}
+                              </span>
+                            </div>
+                            {u.email && <div className="text-caption text-secondary">{u.email}</div>}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => handleOpenEditAccess(u.id)}
+                            >
+                              {isEditing ? 'Fechar Empresas' : 'Gerenciar Empresas'}
+                            </button>
+                            {!(u.id === currentUserId && u.isInstanceAdmin) && (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => handleToggleAdmin(u)}
+                              >
+                                {u.isInstanceAdmin ? 'Remover Admin' : 'Tornar Admin'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {isEditing && (
+                          <div
+                            className="stack-sm"
+                            style={{
+                              paddingTop: '10px',
+                              borderTop: '1px solid var(--color-border-subtle)',
+                            }}
+                          >
+                            <div className="text-caption text-secondary">
+                              Selecione as empresas que esta conta pode acessar:
+                            </div>
+                            <div className="flex flex-wrap gap-3">
+                              {availableCompanies.map((c) => (
+                                <label
+                                  key={c.id}
+                                  className="flex items-center gap-2 text-body-sm"
+                                  style={{ cursor: 'pointer' }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={editingCompanyIds.includes(c.id)}
+                                    onChange={() =>
+                                      setEditingCompanyIds((prev) => toggleCompanySelection(prev, c.id))
+                                    }
+                                  />
+                                  <span>{c.name}</span>
+                                </label>
+                              ))}
+                            </div>
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                disabled={savingAccess}
+                                onClick={() => handleSaveUserAccess(u.id)}
+                              >
+                                {savingAccess ? 'Salvando...' : 'Salvar Empresas'}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               )}
             </section>
           </div>
