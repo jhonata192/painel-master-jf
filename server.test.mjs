@@ -4,7 +4,7 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, it } from 'node:test'
-import { createPanelServer, rewriteSetCookieForHttp } from './server.mjs'
+import { createPanelServer, restoreSecureCookiePrefixForUpstream, rewriteSetCookieForHttp } from './server.mjs'
 
 describe('panel reverse proxy server', () => {
   const servers = []
@@ -78,8 +78,14 @@ describe('panel reverse proxy server', () => {
     assert.equal(/;\s*Secure\b/i.test(setCookie), false)
 
     const sessionRes = await fetch(`http://127.0.0.1:${panelAddr.port}/api/auth/get-session`, {
-      headers: { Cookie: 'paperclip-default.session_token=tok123' },
+      headers: { Cookie: 'other=1; paperclip-default.session_token=tok123' },
     })
-    assert.deepEqual(await sessionRes.json(), { cookie: 'paperclip-default.session_token=tok123' })
+    assert.deepEqual(await sessionRes.json(), {
+      cookie: 'other=1; __Secure-paperclip-default.session_token=tok123',
+    })
+    assert.equal(
+      restoreSecureCookiePrefixForUpstream('__Secure-paperclip-default.session_token=already'),
+      '__Secure-paperclip-default.session_token=already'
+    )
   })
 })

@@ -29,6 +29,15 @@ export function rewriteSetCookieForHttp(headerValue) {
   return rewriteOne(headerValue)
 }
 
+/** Restores __Secure- prefix on Paperclip cookies sent over HTTP so Better Auth matches authCookies.sessionToken.name. */
+export function restoreSecureCookiePrefixForUpstream(cookieHeader) {
+  if (!cookieHeader) return cookieHeader
+  return String(cookieHeader).replace(
+    /(^|;\s*)(?!__Secure-)(paperclip-[^=;\s]+=)/gi,
+    (_, sep, kv) => `${sep}__Secure-${kv}`
+  )
+}
+
 function isHttpsRequest(req) {
   const proto = String(req.headers['x-forwarded-proto'] ?? '')
     .split(',')[0]
@@ -79,6 +88,9 @@ export function createPanelServer({
       const headers = { ...req.headers }
       headers.origin = publicOrigin
       headers['x-forwarded-proto'] = isHttpsRequest(req) ? 'https' : 'http'
+      if (headers.cookie && !isHttpsRequest(req)) {
+        headers.cookie = restoreSecureCookiePrefixForUpstream(headers.cookie)
+      }
       if (!headers['x-forwarded-for'] && req.socket.remoteAddress) {
         headers['x-forwarded-for'] = req.socket.remoteAddress
       }
@@ -148,9 +160,12 @@ export function createPanelServer({
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
         const key = req.rawHeaders[i]
         const val = req.rawHeaders[i + 1]
-        if (key.toLowerCase() === 'origin') {
+        const lower = key.toLowerCase()
+        if (lower === 'origin') {
           headerLines.push(`${key}: ${publicOrigin}`)
           hasOrigin = true
+        } else if (lower === 'cookie' && !isHttpsRequest(req)) {
+          headerLines.push(`${key}: ${restoreSecureCookiePrefixForUpstream(val)}`)
         } else {
           headerLines.push(`${key}: ${val}`)
         }
