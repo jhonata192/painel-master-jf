@@ -16,10 +16,13 @@ export function useSession() {
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
+  const hasLoadedRef = useRef(false)
+  const activeCompanyIdRef = useRef(activeCompanyId)
+  activeCompanyIdRef.current = activeCompanyId
 
   const fetchSession = useCallback(async () => {
     try {
-      setLoading(true)
+      if (!hasLoadedRef.current) setLoading(true)
       const [raw, companyList] = await Promise.all([
         api.getSession(),
         api.listCompanies().catch(() => [] as Company[]),
@@ -33,7 +36,7 @@ export function useSession() {
       setCompanies(resolvedCompanies)
 
       const selectedCompany =
-        resolvedCompanies.find((c) => c.id === activeCompanyId) ||
+        resolvedCompanies.find((c) => c.id === activeCompanyIdRef.current) ||
         resolvedCompanies[0]
 
       const adapted: SessionData = {
@@ -46,6 +49,7 @@ export function useSession() {
         },
         company: selectedCompany,
       }
+      hasLoadedRef.current = true
       setSession(adapted)
       setError(null)
     } catch (err) {
@@ -53,7 +57,7 @@ export function useSession() {
     } finally {
       setLoading(false)
     }
-  }, [activeCompanyId])
+  }, [])
 
   const switchCompany = useCallback((companyId: string) => {
     setActiveCompanyId(companyId)
@@ -67,6 +71,17 @@ export function useSession() {
   useEffect(() => {
     fetchSession()
   }, [fetchSession])
+
+  useEffect(() => {
+    setSession((prev) => {
+      if (!prev) return prev
+      const nextCompany = companies.find((c) => c.id === activeCompanyId)
+      if (!nextCompany || (prev.company.id === nextCompany.id && prev.company.name === nextCompany.name)) {
+        return prev
+      }
+      return { ...prev, company: nextCompany }
+    })
+  }, [activeCompanyId, companies])
 
   return {
     session,

@@ -25,12 +25,19 @@ import type {
 
 interface SettingsViewProps {
   company: Company
-  onCompanyUpdated: () => void
+  companies?: Company[]
+  onSwitchCompany?: (companyId: string) => void
+  onCompanyUpdated: () => Promise<void> | void
 }
 
 type SettingsTab = 'ai' | 'secrets' | 'skills' | 'labels' | 'company'
 
-export function SettingsView({ company, onCompanyUpdated }: SettingsViewProps) {
+export function SettingsView({
+  company,
+  companies = [],
+  onSwitchCompany,
+  onCompanyUpdated,
+}: SettingsViewProps) {
   const { success, error: showError } = useToastHelpers()
   const [tab, setTab] = useState<SettingsTab>('ai')
 
@@ -199,14 +206,19 @@ export function SettingsView({ company, onCompanyUpdated }: SettingsViewProps) {
     e.preventDefault()
     if (!newCompName.trim()) return
     try {
-      await api.createCompany({ name: newCompName.trim() })
+      const created = await api.createCompany({ name: newCompName.trim() })
       setNewCompName('')
+      await onCompanyUpdated()
+      if (created?.id && onSwitchCompany) {
+        onSwitchCompany(created.id)
+      }
       success('Nova empresa criada')
-      onCompanyUpdated()
     } catch (err) {
       showError('Erro ao criar empresa', err instanceof Error ? err.message : 'Falha')
     }
   }
+
+  const availableCompanies = companies.length > 0 ? companies : [company]
 
   return (
     <div className="view-shell">
@@ -400,6 +412,71 @@ export function SettingsView({ company, onCompanyUpdated }: SettingsViewProps) {
 
         {tab === 'company' && (
           <div className="stack-lg">
+            <section className="card stack-md" aria-labelledby="switch-company-title">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <h3 id="switch-company-title" className="text-body flex items-center gap-2" style={{ fontWeight: 600 }}>
+                  <Building2 size={16} aria-hidden="true" /> Alternar Empresa ({availableCompanies.length})
+                </h3>
+                {availableCompanies.length > 1 && onSwitchCompany && (
+                  <select
+                    aria-label="Alternar empresa ativa"
+                    className="input-base"
+                    style={{ width: 'auto', minWidth: '220px' }}
+                    value={company.id}
+                    onChange={(e) => {
+                      const nextId = e.target.value
+                      const target = availableCompanies.find((c) => c.id === nextId)
+                      onSwitchCompany(nextId)
+                      if (target) success(`Empresa alterada para ${target.name}`)
+                    }}
+                  >
+                    {availableCompanies.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <div className="stack-sm">
+                {availableCompanies.map((c) => {
+                  const isActive = c.id === company.id
+                  return (
+                    <div
+                      key={c.id}
+                      className="flex items-center justify-between gap-3 flex-wrap"
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: '8px',
+                        border: '1px solid var(--color-border-default)',
+                        backgroundColor: isActive ? 'var(--color-bg-surface-elevated)' : 'transparent',
+                      }}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-body-sm" style={{ fontWeight: 600 }}>{c.name}</div>
+                        {c.description && <div className="text-caption text-secondary">{c.description}</div>}
+                      </div>
+                      {isActive ? (
+                        <span className="badge badge-success">Ativa</span>
+                      ) : onSwitchCompany ? (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => {
+                            onSwitchCompany(c.id)
+                            success(`Empresa alterada para ${c.name}`)
+                          }}
+                        >
+                          Alternar
+                        </button>
+                      ) : null}
+                    </div>
+                  )
+                })}
+              </div>
+            </section>
+
             <form onSubmit={handleUpdateCompany} className="card stack-md">
               <h3 className="text-body" style={{ fontWeight: 600 }}>Dados da Empresa Atual</h3>
               <div>

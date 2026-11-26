@@ -133,6 +133,17 @@ function AppContent() {
 
   const { connected: wsConnected } = usePaperclipLive(companyId, handleLiveEvent)
 
+  const handleSwitchCompany = useCallback(
+    (nextCompanyId: string) => {
+      if (!nextCompanyId || nextCompanyId === companyId) return
+      switchCompany(nextCompanyId)
+      setActiveAgentRef(null)
+      setSelectedTaskId(null)
+      setNotifications([])
+    },
+    [companyId, switchCompany]
+  )
+
   const handleNewMessage = useCallback(
     (message: { id: string }) => {
       setNotifications((prev) => [
@@ -320,16 +331,28 @@ function AppContent() {
             <Menu size={22} />
           </button>
 
-          <h1 className="text-h3 text-primary text-truncate" style={{ fontSize: '1.05rem' }}>
+          <h1
+            className={cn(
+              'text-h3 text-primary text-truncate',
+              companies.length > 1 && 'desktop-only'
+            )}
+            style={{ fontSize: '1.05rem' }}
+          >
             {session.company.name || 'Master JF — Painel Web'}
           </h1>
 
           {companies.length > 1 && (
             <select
-              className="input-base desktop-only"
-              style={{ width: 'auto', minHeight: '34px', padding: '4px 10px', fontSize: '0.8rem' }}
+              className="input-base"
+              style={{
+                width: 'auto',
+                maxWidth: '220px',
+                minHeight: '34px',
+                padding: '4px 10px',
+                fontSize: '0.8rem',
+              }}
               value={companyId}
-              onChange={(e) => switchCompany(e.target.value)}
+              onChange={(e) => handleSwitchCompany(e.target.value)}
               aria-label="Selecionar empresa"
             >
               {companies.map((c) => (
@@ -578,7 +601,12 @@ function AppContent() {
           )}
 
             {activeView === 'settings' && (
-              <SettingsView company={session.company} onCompanyUpdated={refetchSession} />
+              <SettingsView
+                company={session.company}
+                companies={companies}
+                onSwitchCompany={handleSwitchCompany}
+                onCompanyUpdated={refetchSession}
+              />
             )}
           </ViewErrorBoundary>
         </div>
