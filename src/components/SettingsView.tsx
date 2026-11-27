@@ -50,7 +50,16 @@ export function SettingsView({
 
   // AI Connections
   const [connections, setConnections] = useState<AiConnection[]>([])
+  const [canManageConnections, setCanManageConnections] = useState(true)
   const [probeResult, setProbeResult] = useState<Record<string, unknown> | null>(null)
+  const [aiPreset, setAiPreset] = useState('nvidia_nim_proxy')
+  const [aiName, setAiName] = useState('NVIDIA NIM (proxy)')
+  const [aiBaseUrl, setAiBaseUrl] = useState('http://127.0.0.1:4010/v1')
+  const [aiModelsText, setAiModelsText] = useState('minimaxai/minimax-m3.1-flash')
+  const [aiApiKey, setAiApiKey] = useState('')
+  const [aiOwnership, setAiOwnership] = useState<'shared' | 'personal'>('shared')
+  const [aiAllAgents, setAiAllAgents] = useState(true)
+  const [creatingConnection, setCreatingConnection] = useState(false)
 
   // Secrets
   const [secrets, setSecrets] = useState<CompanySecret[]>([])
@@ -98,6 +107,7 @@ export function SettingsView({
         isInstanceAdmin ? api.listAdminUsers(userQuery).catch(() => []) : Promise.resolve([]),
       ])
       setConnections(ai.connections ?? [])
+      setCanManageConnections((ai as { canManageConnections?: boolean }).canManageConnections !== false)
       setSecrets(sec)
       setSkills(sk)
       setLabels(lb)
@@ -122,6 +132,92 @@ export function SettingsView({
       success('Conexão verificada')
     } catch (err) {
       showError('Erro ao verificar conexão', err instanceof Error ? err.message : 'Falha')
+    }
+  }
+
+  const applyAiPreset = (preset: string) => {
+    setAiPreset(preset)
+    if (preset === 'nvidia_nim_proxy') {
+      setAiName('NVIDIA NIM (proxy)')
+      setAiBaseUrl('http://127.0.0.1:4010/v1')
+      setAiModelsText('minimaxai/minimax-m3.1-flash')
+    } else if (preset === 'openai_gateway') {
+      setAiName('Gateway OpenAI-Compatível')
+      setAiBaseUrl('https://')
+      setAiModelsText('')
+    } else {
+      const labels: Record<string, string> = {
+        openai: 'OpenAI',
+        anthropic: 'Claude (Anthropic)',
+        google: 'Google Gemini',
+        openrouter: 'OpenRouter',
+        xai: 'Grok (xAI)',
+        github: 'GitHub Copilot',
+      }
+      setAiName(labels[preset] ?? preset)
+      setAiBaseUrl('')
+      setAiModelsText('')
+    }
+  }
+
+  const isGatewayPreset = aiPreset === 'nvidia_nim_proxy' || aiPreset === 'openai_gateway'
+
+  const handleCreateAiConnection = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!aiName.trim() || !aiApiKey.trim()) {
+      showError('Dados incompletos', 'Informe o nome da conexão e a API key.')
+      return
+    }
+
+    const models = aiModelsText
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((id) => ({ id }))
+
+    const payload: Record<string, unknown> = {
+      provider: isGatewayPreset ? 'openai' : aiPreset,
+      method: 'api_key',
+      name: aiName.trim(),
+      ownership: aiOwnership,
+      apiKey: aiApiKey.trim(),
+      agentIds: [],
+      allAgents: aiAllAgents,
+    }
+
+    if (isGatewayPreset) {
+      if (!aiBaseUrl.trim()) {
+        showError('URL base obrigatória', 'Informe a URL base do endpoint /v1.')
+        return
+      }
+      let isLoopback = false
+      try {
+        const parsed = new URL(aiBaseUrl.trim())
+        isLoopback = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)
+      } catch {
+        showError('URL inválida', 'Informe uma URL válida (https://... ou http://127.0.0.1:4010/v1).')
+        return
+      }
+      payload.routing = {
+        kind: isLoopback && aiPreset === 'openai_gateway' ? 'local' : 'gateway',
+        protocol: 'chat',
+        baseUrl: aiBaseUrl.trim(),
+        auth: 'bearer',
+        models,
+      }
+    }
+
+    setCreatingConnection(true)
+    try {
+      await api.createAiConnection(company.id, payload)
+      setAiApiKey('')
+      success('Conexão de IA adicionada')
+      const updated = await api.listAiConnections(company.id)
+      setConnections(updated.connections ?? [])
+    } catch (err) {
+      showError('Erro ao adicionar conexão', err instanceof Error ? err.message : 'Falha')
+    } finally {
+      setCreatingConnection(false)
     }
   }
 
@@ -361,8 +457,120 @@ export function SettingsView({
 
       <div className="view-body stack-lg">
         {tab === 'ai' && (
-          <div className="stack-md">
-            {connections.length === 0 ? (
+          <div className="stack-lg">
+            {canManageConnections && (
+              <form onSubmit={handleCreateAiConnection} className="card stack-md" aria-labelledby="add-ai-connection-title">
+                <h3 id="add-ai-connection-title" className="text-body flex items-center gap-2" style={{ fontWeight: 600 }}>
+                  <Plus size={16} aria-hidden="true" /> Adicionar Conexão de IA
+                </h3>
+
+                <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))' }}>
+                  <div>
+                    <label htmlFor="ai-preset" className="label">Provedor / Tipo</label>
+                    <select
+                      id="ai-preset"
+                      className="input-base"
+                      value={aiPreset}
+                      onChange={(e) => applyAiPreset(e.target.value)}
+                    >
+                      <option value="nvidia_nim_proxy">NVIDIA NIM (Proxy local /v1)</option>
+                      <option value="openai_gateway">Gateway OpenAI-Compatível</option>
+                      <option value="openai">OpenAI</option>
+                      <option value="anthropic">Claude (Anthropic)</option>
+                      <option value="google">Google (Gemini)</option>
+                      <option value="openrouter">OpenRouter</option>
+                      <option value="xai">Grok (xAI)</option>
+                      <option value="github">GitHub Copilot</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label htmlFor="ai-conn-name" className="label">Nome da Conexão *</label>
+                    <input
+                      id="ai-conn-name"
+                      className="input-base"
+                      value={aiName}
+                      onChange={(e) => setAiName(e.target.value)}
+                      placeholder="Ex.: NVIDIA NIM (proxy)"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="ai-api-key" className="label">API Key *</label>
+                    <input
+                      id="ai-api-key"
+                      type="password"
+                      className="input-base text-mono"
+                      value={aiApiKey}
+                      onChange={(e) => setAiApiKey(e.target.value)}
+                      placeholder={aiPreset === 'nvidia_nim_proxy' ? 'nvapi-...' : 'Cole a chave de API...'}
+                      required
+                    />
+                  </div>
+                </div>
+
+                {isGatewayPreset && (
+                  <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+                    <div>
+                      <label htmlFor="ai-base-url" className="label">URL Base (/v1) *</label>
+                      <input
+                        id="ai-base-url"
+                        className="input-base text-mono"
+                        value={aiBaseUrl}
+                        onChange={(e) => setAiBaseUrl(e.target.value)}
+                        placeholder="http://127.0.0.1:4010/v1"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="ai-models" className="label">Modelos (separados por vírgula)</label>
+                      <input
+                        id="ai-models"
+                        className="input-base text-mono"
+                        value={aiModelsText}
+                        onChange={(e) => setAiModelsText(e.target.value)}
+                        placeholder="minimaxai/minimax-m3.1-flash"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <label className="flex items-center gap-2 text-body-sm">
+                      <span>Escopo:</span>
+                      <select
+                        aria-label="Escopo da conexão"
+                        className="input-base"
+                        style={{ width: 'auto' }}
+                        value={aiOwnership}
+                        onChange={(e) => setAiOwnership(e.target.value as 'shared' | 'personal')}
+                      >
+                        <option value="shared">Compartilhada na empresa</option>
+                        <option value="personal">Pessoal</option>
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-2 text-body-sm" style={{ cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={aiAllAgents}
+                        onChange={(e) => setAiAllAgents(e.target.checked)}
+                      />
+                      <span>Liberar para todos os agentes</span>
+                    </label>
+                  </div>
+
+                  <button type="submit" className="btn btn-primary btn-sm" disabled={creatingConnection}>
+                    <Plus size={15} aria-hidden="true" />
+                    {creatingConnection ? 'Adicionando...' : 'Adicionar Conexão'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <div className="stack-md">
+              {connections.length === 0 ? (
               <p className="text-body-sm text-tertiary">Nenhuma conexão de IA configurada.</p>
             ) : (
               connections.map((c) => {
@@ -402,9 +610,10 @@ export function SettingsView({
                 )
               })
             )}
-            {probeResult && (
-              <pre className="log-console">{JSON.stringify(probeResult, null, 2)}</pre>
-            )}
+              {probeResult && (
+                <pre className="log-console">{JSON.stringify(probeResult, null, 2)}</pre>
+              )}
+            </div>
           </div>
         )}
 

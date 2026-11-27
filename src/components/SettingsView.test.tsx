@@ -278,4 +278,72 @@ describe('SettingsView', () => {
       )
     })
   })
+
+  it('creates an NVIDIA NIM proxy AI connection from the AI Connections tab', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/companies/c-9/ai-connections' && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          status: 201,
+          json: async () => ({ connectionId: 'conn-new', grantId: 'grant-new' }),
+        })
+      }
+      if (url === '/api/companies/c-9/ai-connections') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ canManageConnections: true, connections: [] }),
+        })
+      }
+      if (url.includes('/health')) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ status: 'ok' }) })
+      }
+      if (url.includes('/instance/settings')) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({}) })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => [] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <ToastProvider>
+        <SettingsView
+          company={{ id: 'c-9', name: 'Aurora Security' }}
+          onCompanyUpdated={vi.fn()}
+        />
+      </ToastProvider>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Adicionar Conexão de IA')).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByLabelText(/API Key/i), { target: { value: 'nvapi-secret-key' } })
+    fireEvent.click(screen.getByRole('button', { name: /Adicionar Conexão/i }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/companies/c-9/ai-connections',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            provider: 'openai',
+            method: 'api_key',
+            name: 'NVIDIA NIM (proxy)',
+            ownership: 'shared',
+            apiKey: 'nvapi-secret-key',
+            agentIds: [],
+            allAgents: true,
+            routing: {
+              kind: 'gateway',
+              protocol: 'chat',
+              baseUrl: 'http://127.0.0.1:4010/v1',
+              auth: 'bearer',
+              models: [{ id: 'minimaxai/minimax-m3.1-flash' }],
+            },
+          }),
+        })
+      )
+    })
+  })
 })
