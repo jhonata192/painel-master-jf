@@ -133,8 +133,8 @@ describe('SettingsView', () => {
           json: async () => [
             {
               id: 'u-1',
-              name: 'Admin',
-              email: 'admin@masterjf.com',
+              name: 'Jhonata Admin',
+              email: 'fjhonata14@gmail.com',
               isInstanceAdmin: true,
               activeCompanyMembershipCount: 2,
             },
@@ -179,20 +179,21 @@ describe('SettingsView', () => {
                 principalType: 'user',
                 principalId: 'u-2',
                 status: 'active',
-                membershipRole: 'member',
+                membershipRole: 'operator',
                 companyName: 'Filial Sul',
                 companyStatus: 'active',
+                grants: [{ permissionKey: 'agents:read', scope: null }],
               },
             ],
           }),
         })
       }
-      if (url === '/api/admin/users/u-2/company-access' && init?.method === 'PUT') {
+      if (url === '/api/admin/users/u-2' && init?.method === 'PATCH') {
         return Promise.resolve({
           ok: true,
           status: 200,
           json: async () => ({
-            user: { id: 'u-2', email: 'cliente@sul.com', name: 'Cliente Sul', isInstanceAdmin: false },
+            user: { id: 'u-2', email: 'cliente@sul.com', name: 'Cliente Sul Editado', isInstanceAdmin: false },
             companyAccess: [],
           }),
         })
@@ -242,6 +243,7 @@ describe('SettingsView', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Cliente Sul')).toBeInTheDocument()
+      expect(screen.getByText('Admin Principal')).toBeInTheDocument()
     })
 
     fireEvent.change(screen.getByLabelText('Nome'), { target: { value: 'Novo Cliente' } })
@@ -259,21 +261,23 @@ describe('SettingsView', () => {
       )
     })
 
-    const manageButtons = screen.getAllByRole('button', { name: 'Gerenciar Empresas' })
+    const manageButtons = screen.getAllByRole('button', { name: /Editar Conta & Permissões/i })
     fireEvent.click(manageButtons[1])
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Salvar Empresas' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Salvar Conta' })).toBeInTheDocument()
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Salvar Empresas' }))
+    fireEvent.change(screen.getByLabelText('Papel em Filial Sul'), { target: { value: 'admin' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Criar agentes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar Conta' }))
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/admin/users/u-2/company-access',
+        '/api/admin/users/u-2',
         expect.objectContaining({
-          method: 'PUT',
-          body: JSON.stringify({ companyIds: ['c-2'] }),
+          method: 'PATCH',
+          body: expect.stringContaining('"membershipRole":"admin"'),
         })
       )
     })
@@ -343,6 +347,115 @@ describe('SettingsView', () => {
             },
           }),
         })
+      )
+    })
+  })
+
+  it('creates a Kilo Code Auto Router Free connection and edits/deletes connections', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => true))
+    let storedConnections = [
+      {
+        id: 'conn-kilo',
+        grantId: 'grant-kilo',
+        provider: 'openai',
+        method: 'api_key',
+        name: 'Kilo Inicial',
+        ownership: 'shared',
+        status: 'connected',
+        routing: {
+          kind: 'gateway',
+          protocol: 'chat',
+          auth: 'none',
+          baseUrl: 'https://ai-gateway.kilo.ai/api/v1',
+          models: [{ id: 'kilo-auto/free' }],
+        },
+      },
+    ]
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url === '/api/companies/c-9/ai-connections' && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          status: 201,
+          json: async () => ({ connectionId: 'conn-new', grantId: 'grant-new' }),
+        })
+      }
+      if (url === '/api/companies/c-9/ai-connections/conn-kilo' && init?.method === 'PATCH') {
+        storedConnections = [{ ...storedConnections[0], name: 'Kilo Editado' }]
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ connectionId: 'conn-kilo', grantId: 'grant-kilo' }),
+        })
+      }
+      if (url === '/api/companies/c-9/ai-connections/conn-kilo' && init?.method === 'DELETE') {
+        storedConnections = []
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
+      }
+      if (url === '/api/companies/c-9/ai-connections') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ canManageConnections: true, connections: storedConnections }),
+        })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => [] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <ToastProvider>
+        <SettingsView company={{ id: 'c-9', name: 'Aurora Security' }} onCompanyUpdated={vi.fn()} />
+      </ToastProvider>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Kilo Inicial')).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByLabelText('Provedor / Tipo'), { target: { value: 'kilo_free' } })
+    fireEvent.click(screen.getByRole('button', { name: /Adicionar Conexão/i }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/companies/c-9/ai-connections',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            provider: 'openai',
+            method: 'api_key',
+            name: 'Kilo Code Auto Router (Free)',
+            ownership: 'shared',
+            agentIds: [],
+            allAgents: true,
+            routing: {
+              kind: 'gateway',
+              protocol: 'chat',
+              baseUrl: 'https://ai-gateway.kilo.ai/api/v1',
+              auth: 'none',
+              models: [{ id: 'kilo-auto/free' }],
+            },
+          }),
+        })
+      )
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Editar' }))
+    fireEvent.change(screen.getByDisplayValue('Kilo Inicial'), { target: { value: 'Kilo Editado' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar Conexão' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/companies/c-9/ai-connections/conn-kilo',
+        expect.objectContaining({ method: 'PATCH' })
+      )
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Excluir' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/companies/c-9/ai-connections/conn-kilo',
+        expect.objectContaining({ method: 'DELETE' })
       )
     })
   })

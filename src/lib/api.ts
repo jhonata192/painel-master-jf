@@ -234,6 +234,13 @@ class ApiClient {
     })
   }
 
+  async updateAdminUser(userId: string, data: Record<string, unknown>): Promise<UserCompanyAccessResponse> {
+    return this.request<UserCompanyAccessResponse>(`/admin/users/${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
+  }
+
   async promoteInstanceAdmin(userId: string): Promise<unknown> {
     return this.request(`/admin/users/${encodeURIComponent(userId)}/promote-instance-admin`, {
       method: 'POST',
@@ -1313,6 +1320,19 @@ class ApiClient {
     return this.request<AiConnection>(`/companies/${companyId}/ai-connections`, {
       method: 'POST',
       body: JSON.stringify(data),
+    })
+  }
+
+  async updateAiConnection(companyId: string, connectionId: string, data: Record<string, unknown>): Promise<AiConnection> {
+    return this.request<AiConnection>(`/companies/${companyId}/ai-connections/${encodeURIComponent(connectionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async deleteAiConnection(companyId: string, connectionId: string): Promise<void> {
+    await this.request(`/companies/${companyId}/ai-connections/${encodeURIComponent(connectionId)}`, {
+      method: 'DELETE',
     })
   }
 

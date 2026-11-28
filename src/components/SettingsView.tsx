@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Users,
   Shield,
+  Pencil,
 } from 'lucide-react'
 import { cn, formatTimestamp } from '../lib/utils'
 import { api } from '../lib/api'
@@ -37,6 +38,37 @@ interface SettingsViewProps {
 
 type SettingsTab = 'ai' | 'secrets' | 'skills' | 'labels' | 'company' | 'accounts'
 
+const PRIMARY_ADMIN_EMAIL = 'fjhonata14@gmail.com'
+
+const isPrimaryAdminEmail = (email?: string | null) =>
+  typeof email === 'string' && email.trim().toLowerCase() === PRIMARY_ADMIN_EMAIL
+
+const COMPANY_ROLE_OPTIONS = [
+  { value: 'owner', label: 'Proprietário' },
+  { value: 'admin', label: 'Administrador' },
+  { value: 'operator', label: 'Operador' },
+  { value: 'viewer', label: 'Visualizador' },
+] as const
+
+const COMPANY_PERMISSION_OPTIONS = [
+  { key: 'agents:read', label: 'Ver agentes' },
+  { key: 'agents:create', label: 'Criar agentes' },
+  { key: 'agents:configure', label: 'Configurar agentes' },
+  { key: 'tasks:assign', label: 'Atribuir tarefas' },
+  { key: 'skills:create', label: 'Criar/importar skills' },
+  { key: 'tools:manage_connections', label: 'Gerenciar conexões de IA' },
+  { key: 'users:invite', label: 'Convidar usuários' },
+  { key: 'users:manage_permissions', label: 'Gerenciar permissões' },
+  { key: 'joins:approve', label: 'Aprovar solicitações' },
+] as const
+
+interface AccountCompanyDraft {
+  enabled: boolean
+  membershipRole: 'owner' | 'admin' | 'operator' | 'viewer'
+  status: 'active' | 'pending' | 'suspended'
+  grants: string[]
+}
+
 export function SettingsView({
   company,
   companies = [],
@@ -60,6 +92,15 @@ export function SettingsView({
   const [aiOwnership, setAiOwnership] = useState<'shared' | 'personal'>('shared')
   const [aiAllAgents, setAiAllAgents] = useState(true)
   const [creatingConnection, setCreatingConnection] = useState(false)
+  const [editingConnId, setEditingConnId] = useState<string | null>(null)
+  const [editConnName, setEditConnName] = useState('')
+  const [editConnApiKey, setEditConnApiKey] = useState('')
+  const [editConnBaseUrl, setEditConnBaseUrl] = useState('')
+  const [editConnModelsText, setEditConnModelsText] = useState('')
+  const [editConnOwnership, setEditConnOwnership] = useState<'shared' | 'personal'>('shared')
+  const [editConnAllAgents, setEditConnAllAgents] = useState(true)
+  const [savingConnection, setSavingConnection] = useState(false)
+  const [deletingConnId, setDeletingConnId] = useState<string | null>(null)
 
   // Secrets
   const [secrets, setSecrets] = useState<CompanySecret[]>([])
@@ -92,7 +133,11 @@ export function SettingsView({
   const [accCompanyIds, setAccCompanyIds] = useState<string[]>(() => (company.id ? [company.id] : []))
   const [creatingAccount, setCreatingAccount] = useState(false)
   const [editingUserId, setEditingUserId] = useState<string | null>(null)
-  const [editingCompanyIds, setEditingCompanyIds] = useState<string[]>([])
+  const [editUserName, setEditUserName] = useState('')
+  const [editUserEmail, setEditUserEmail] = useState('')
+  const [editUserPassword, setEditUserPassword] = useState('')
+  const [editUserIsAdmin, setEditUserIsAdmin] = useState(false)
+  const [editUserCompanies, setEditUserCompanies] = useState<Record<string, AccountCompanyDraft>>({})
   const [savingAccess, setSavingAccess] = useState(false)
 
   const loadAll = useCallback(async () => {
@@ -141,6 +186,11 @@ export function SettingsView({
       setAiName('NVIDIA NIM (proxy)')
       setAiBaseUrl('http://127.0.0.1:4010/v1')
       setAiModelsText('minimaxai/minimax-m3.1-flash')
+    } else if (preset === 'kilo_free') {
+      setAiName('Kilo Code Auto Router (Free)')
+      setAiBaseUrl('https://ai-gateway.kilo.ai/api/v1')
+      setAiModelsText('kilo-auto/free')
+      setAiApiKey('')
     } else if (preset === 'openai_gateway') {
       setAiName('Gateway OpenAI-Compatível')
       setAiBaseUrl('https://')
@@ -160,51 +210,72 @@ export function SettingsView({
     }
   }
 
-  const isGatewayPreset = aiPreset === 'nvidia_nim_proxy' || aiPreset === 'openai_gateway'
+  const isGatewayPreset =
+    aiPreset === 'nvidia_nim_proxy' || aiPreset === 'openai_gateway' || aiPreset === 'kilo_free'
+  const isNoAuthPreset = aiPreset === 'kilo_free'
 
-  const handleCreateAiConnection = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!aiName.trim() || !aiApiKey.trim()) {
-      showError('Dados incompletos', 'Informe o nome da conexão e a API key.')
-      return
-    }
-
-    const models = aiModelsText
+  const parseModelsText = (text: string) =>
+    text
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean)
       .map((id) => ({ id }))
+
+  const buildGatewayRouting = (
+    baseUrlRaw: string,
+    modelsTextRaw: string,
+    auth: 'bearer' | 'api_key' | 'none',
+    kindHint: 'gateway' | 'local',
+    protocol: 'chat' | 'responses' | 'messages' = 'chat',
+  ) => {
+    const trimmedUrl = baseUrlRaw.trim()
+    if (!trimmedUrl) {
+      showError('URL base obrigatória', 'Informe a URL base do endpoint /v1.')
+      return null
+    }
+    let isLoopback = false
+    try {
+      const parsed = new URL(trimmedUrl)
+      isLoopback = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)
+    } catch {
+      showError('URL inválida', 'Informe uma URL válida (https://... ou http://127.0.0.1:4010/v1).')
+      return null
+    }
+    return {
+      kind: isLoopback && kindHint === 'local' ? 'local' : 'gateway',
+      protocol,
+      baseUrl: trimmedUrl,
+      auth,
+      models: parseModelsText(modelsTextRaw),
+    }
+  }
+
+  const handleCreateAiConnection = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!aiName.trim() || (!isNoAuthPreset && !aiApiKey.trim())) {
+      showError('Dados incompletos', 'Informe o nome da conexão e a API key.')
+      return
+    }
 
     const payload: Record<string, unknown> = {
       provider: isGatewayPreset ? 'openai' : aiPreset,
       method: 'api_key',
       name: aiName.trim(),
       ownership: aiOwnership,
-      apiKey: aiApiKey.trim(),
+      ...(isNoAuthPreset ? {} : { apiKey: aiApiKey.trim() }),
       agentIds: [],
       allAgents: aiAllAgents,
     }
 
     if (isGatewayPreset) {
-      if (!aiBaseUrl.trim()) {
-        showError('URL base obrigatória', 'Informe a URL base do endpoint /v1.')
-        return
-      }
-      let isLoopback = false
-      try {
-        const parsed = new URL(aiBaseUrl.trim())
-        isLoopback = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)
-      } catch {
-        showError('URL inválida', 'Informe uma URL válida (https://... ou http://127.0.0.1:4010/v1).')
-        return
-      }
-      payload.routing = {
-        kind: isLoopback && aiPreset === 'openai_gateway' ? 'local' : 'gateway',
-        protocol: 'chat',
-        baseUrl: aiBaseUrl.trim(),
-        auth: 'bearer',
-        models,
-      }
+      const routing = buildGatewayRouting(
+        aiBaseUrl,
+        aiModelsText,
+        isNoAuthPreset ? 'none' : 'bearer',
+        aiPreset === 'openai_gateway' ? 'local' : 'gateway',
+      )
+      if (!routing) return
+      payload.routing = routing
     }
 
     setCreatingConnection(true)
@@ -218,6 +289,83 @@ export function SettingsView({
       showError('Erro ao adicionar conexão', err instanceof Error ? err.message : 'Falha')
     } finally {
       setCreatingConnection(false)
+    }
+  }
+
+  const handleOpenEditConnection = (conn: AiConnection) => {
+    if (editingConnId === conn.id) {
+      setEditingConnId(null)
+      return
+    }
+    const modelsList = conn.routing?.models || conn.models || []
+    setEditingConnId(conn.id)
+    setEditConnName(conn.name || conn.label || conn.provider)
+    setEditConnApiKey('')
+    setEditConnBaseUrl(conn.routing?.baseUrl ?? '')
+    setEditConnModelsText(
+      modelsList
+        .map((m) => (typeof m === 'string' ? m : m.id))
+        .filter(Boolean)
+        .join(', '),
+    )
+    setEditConnOwnership(conn.ownership === 'personal' ? 'personal' : 'shared')
+    setEditConnAllAgents(true)
+  }
+
+  const handleSaveConnection = async (conn: AiConnection) => {
+    if (!editConnName.trim()) {
+      showError('Nome obrigatório', 'Informe um nome para a conexão.')
+      return
+    }
+    const payload: Record<string, unknown> = {
+      name: editConnName.trim(),
+      ownership: editConnOwnership,
+      allAgents: editConnAllAgents,
+    }
+    if (editConnApiKey.trim() && conn.routing?.auth !== 'none') {
+      payload.apiKey = editConnApiKey.trim()
+    }
+    if (conn.routing && ['gateway', 'local'].includes(conn.routing.kind ?? '')) {
+      const routing = buildGatewayRouting(
+        editConnBaseUrl,
+        editConnModelsText,
+        conn.routing.auth ?? 'bearer',
+        conn.routing.kind === 'local' ? 'local' : 'gateway',
+        (conn.routing.protocol as 'chat' | 'responses' | 'messages') ?? 'chat',
+      )
+      if (!routing) return
+      payload.routing = routing
+    }
+
+    setSavingConnection(true)
+    try {
+      await api.updateAiConnection(company.id, conn.id, payload)
+      success('Conexão atualizada')
+      setEditingConnId(null)
+      setEditConnApiKey('')
+      const updated = await api.listAiConnections(company.id)
+      setConnections(updated.connections ?? [])
+    } catch (err) {
+      showError('Erro ao atualizar conexão', err instanceof Error ? err.message : 'Falha')
+    } finally {
+      setSavingConnection(false)
+    }
+  }
+
+  const handleDeleteConnection = async (conn: AiConnection) => {
+    const label = conn.name || conn.label || conn.provider
+    if (!confirm(`Excluir conexão de IA "${label}"?`)) return
+    setDeletingConnId(conn.id)
+    try {
+      await api.deleteAiConnection(company.id, conn.id)
+      if (editingConnId === conn.id) setEditingConnId(null)
+      success('Conexão excluída')
+      const updated = await api.listAiConnections(company.id)
+      setConnections(updated.connections ?? [])
+    } catch (err) {
+      showError('Erro ao excluir conexão', err instanceof Error ? err.message : 'Falha')
+    } finally {
+      setDeletingConnId(null)
     }
   }
 
@@ -371,42 +519,117 @@ export function SettingsView({
     }
   }
 
-  const handleOpenEditAccess = async (userId: string) => {
-    if (editingUserId === userId) {
+  const handleOpenEditAccount = async (user: AdminUser) => {
+    if (editingUserId === user.id) {
       setEditingUserId(null)
       return
     }
     try {
-      const access = await api.getUserCompanyAccess(userId)
-      const activeIds = access.companyAccess
-        .filter((item) => item.status === 'active')
-        .map((item) => item.companyId)
-      setEditingCompanyIds(activeIds)
-      setEditingUserId(userId)
+      const access = await api.getUserCompanyAccess(user.id)
+      const byCompany = new Map(access.companyAccess.map((item) => [item.companyId, item]))
+      const drafts: Record<string, AccountCompanyDraft> = {}
+      for (const comp of availableCompanies) {
+        const existing = byCompany.get(comp.id)
+        const role = (['owner', 'admin', 'operator', 'viewer'].includes(existing?.membershipRole ?? '')
+          ? existing?.membershipRole
+          : 'operator') as AccountCompanyDraft['membershipRole']
+        const status = (['active', 'pending', 'suspended'].includes(existing?.status ?? '')
+          ? existing?.status
+          : 'active') as AccountCompanyDraft['status']
+        drafts[comp.id] = {
+          enabled: Boolean(existing && existing.status !== 'archived'),
+          membershipRole: role,
+          status,
+          grants: (existing?.grants ?? []).map((g) => g.permissionKey),
+        }
+      }
+      setEditUserName(access.user?.name ?? user.name ?? '')
+      setEditUserEmail(access.user?.email ?? user.email ?? '')
+      setEditUserPassword('')
+      setEditUserIsAdmin(access.user?.isInstanceAdmin ?? user.isInstanceAdmin)
+      setEditUserCompanies(drafts)
+      setEditingUserId(user.id)
     } catch (err) {
-      showError('Erro ao carregar empresas da conta', err instanceof Error ? err.message : 'Falha')
+      showError('Erro ao carregar dados da conta', err instanceof Error ? err.message : 'Falha')
     }
   }
 
-  const handleSaveUserAccess = async (userId: string) => {
+  const updateAccountCompanyDraft = (
+    companyId: string,
+    patch: Partial<AccountCompanyDraft>,
+  ) => {
+    setEditUserCompanies((prev) => ({
+      ...prev,
+      [companyId]: {
+        ...(prev[companyId] ?? {
+          enabled: false,
+          membershipRole: 'operator',
+          status: 'active',
+          grants: [],
+        }),
+        ...patch,
+      },
+    }))
+  }
+
+  const toggleAccountPermission = (companyId: string, permissionKey: string) => {
+    const current = editUserCompanies[companyId]
+    if (!current) return
+    const nextGrants = current.grants.includes(permissionKey)
+      ? current.grants.filter((item) => item !== permissionKey)
+      : [...current.grants, permissionKey]
+    updateAccountCompanyDraft(companyId, { grants: nextGrants })
+  }
+
+  const handleSaveAccountEdit = async (user: AdminUser) => {
+    if (!editUserName.trim() || !editUserEmail.trim()) {
+      showError('Dados inválidos', 'Informe nome e e-mail válidos.')
+      return
+    }
+    if (editUserPassword && editUserPassword.length < 8) {
+      showError('Senha muito curta', 'A nova senha deve ter no mínimo 8 caracteres.')
+      return
+    }
+    const primaryAdmin = isPrimaryAdminEmail(user.email)
     setSavingAccess(true)
     try {
-      await api.setUserCompanyAccess(userId, editingCompanyIds)
-      success('Acesso às empresas atualizado')
+      await api.updateAdminUser(user.id, {
+        name: editUserName.trim(),
+        ...(primaryAdmin ? {} : { email: editUserEmail.trim() }),
+        ...(editUserPassword ? { password: editUserPassword } : {}),
+        isInstanceAdmin: primaryAdmin ? true : editUserIsAdmin,
+        companyAccess: availableCompanies.map((comp) => {
+          const draft = editUserCompanies[comp.id] ?? {
+            enabled: false,
+            membershipRole: 'operator',
+            status: 'active',
+            grants: [],
+          }
+          return {
+            companyId: comp.id,
+            enabled: draft.enabled,
+            membershipRole: draft.membershipRole,
+            status: draft.status,
+            grants: draft.grants.map((permissionKey) => ({ permissionKey })),
+          }
+        }),
+      })
+      success('Conta e permissões atualizadas')
       setEditingUserId(null)
+      setEditUserPassword('')
       setAdminUsers(await api.listAdminUsers(userQuery).catch(() => []))
-      if (userId === currentUserId) {
+      if (user.id === currentUserId) {
         await onCompanyUpdated()
       }
     } catch (err) {
-      showError('Erro ao atualizar acessos', err instanceof Error ? err.message : 'Falha')
+      showError('Erro ao atualizar conta', err instanceof Error ? err.message : 'Falha')
     } finally {
       setSavingAccess(false)
     }
   }
 
   const handleToggleAdmin = async (user: AdminUser) => {
-    if (user.id === currentUserId && user.isInstanceAdmin) return
+    if (isPrimaryAdminEmail(user.email) || (user.id === currentUserId && user.isInstanceAdmin)) return
     try {
       if (user.isInstanceAdmin) {
         await api.demoteInstanceAdmin(user.id)
@@ -474,6 +697,7 @@ export function SettingsView({
                       onChange={(e) => applyAiPreset(e.target.value)}
                     >
                       <option value="nvidia_nim_proxy">NVIDIA NIM (Proxy local /v1)</option>
+                      <option value="kilo_free">Kilo Code Auto Router (Free)</option>
                       <option value="openai_gateway">Gateway OpenAI-Compatível</option>
                       <option value="openai">OpenAI</option>
                       <option value="anthropic">Claude (Anthropic)</option>
@@ -496,19 +720,27 @@ export function SettingsView({
                     />
                   </div>
 
-                  <div>
-                    <label htmlFor="ai-api-key" className="label">API Key *</label>
-                    <input
-                      id="ai-api-key"
-                      type="password"
-                      className="input-base text-mono"
-                      value={aiApiKey}
-                      onChange={(e) => setAiApiKey(e.target.value)}
-                      placeholder={aiPreset === 'nvidia_nim_proxy' ? 'nvapi-...' : 'Cole a chave de API...'}
-                      required
-                    />
-                  </div>
+                  {!isNoAuthPreset && (
+                    <div>
+                      <label htmlFor="ai-api-key" className="label">API Key *</label>
+                      <input
+                        id="ai-api-key"
+                        type="password"
+                        className="input-base text-mono"
+                        value={aiApiKey}
+                        onChange={(e) => setAiApiKey(e.target.value)}
+                        placeholder={aiPreset === 'nvidia_nim_proxy' ? 'nvapi-...' : 'Cole a chave de API...'}
+                        required
+                      />
+                    </div>
+                  )}
                 </div>
+
+                {isNoAuthPreset && (
+                  <p className="text-caption text-secondary">
+                    O roteador automático gratuito do Kilo Code (<span className="text-mono">kilo-auto/free</span>) não exige chave de API.
+                  </p>
+                )}
 
                 {isGatewayPreset && (
                   <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
@@ -575,36 +807,168 @@ export function SettingsView({
             ) : (
               connections.map((c) => {
                 const modelsList = c.routing?.models || c.models || []
+                const isEditingConn = editingConnId === c.id
+                const isGatewayConn = Boolean(c.routing && ['gateway', 'local'].includes(c.routing.kind ?? ''))
                 return (
-                  <article key={c.id} className="card flex items-start justify-between gap-3 flex-wrap">
-                    <div className="stack-xs">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <strong className="text-body">{c.name || c.label || c.provider}</strong>
-                        <span className="badge badge-brand">{c.method}</span>
-                        {c.status && <span className="badge badge-success">{c.status}</span>}
-                        {c.routing?.protocol && <span className="badge badge-neutral">{c.routing.protocol}</span>}
-                      </div>
-                      {c.routing?.baseUrl && (
-                        <div className="text-caption text-mono text-tertiary">{c.routing.baseUrl}</div>
-                      )}
-                      {modelsList.length > 0 && (
-                        <div className="flex items-center gap-1 flex-wrap mt-1">
-                          {modelsList.map((m, idx) => {
-                            const key = typeof m === 'string' ? m : m.id || String(idx)
-                            const label = typeof m === 'string' ? m : (m.label || m.id)
-                            return (
-                              <span key={key} className="badge badge-info text-mono">
-                                {label}
-                              </span>
-                            )
-                          })}
+                  <article key={c.id} className="card stack-md">
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="stack-xs">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <strong className="text-body">{c.name || c.label || c.provider}</strong>
+                          <span className="badge badge-brand">{c.method}</span>
+                          {c.status && <span className="badge badge-success">{c.status}</span>}
+                          {c.routing?.protocol && <span className="badge badge-neutral">{c.routing.protocol}</span>}
+                          {c.routing?.auth === 'none' && <span className="badge badge-info">Sem chave (Free)</span>}
                         </div>
-                      )}
+                        {c.routing?.baseUrl && (
+                          <div className="text-caption text-mono text-tertiary">{c.routing.baseUrl}</div>
+                        )}
+                        {modelsList.length > 0 && (
+                          <div className="flex items-center gap-1 flex-wrap mt-1">
+                            {modelsList.map((m, idx) => {
+                              const key = typeof m === 'string' ? m : m.id || String(idx)
+                              const label = typeof m === 'string' ? m : (m.label || m.id)
+                              return (
+                                <span key={key} className="badge badge-info text-mono">
+                                  {label}
+                                </span>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {c.usageProbeSupported !== false && (
+                          <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleProbeConnection(c)}>
+                            <RefreshCw size={14} /> Testar Uso
+                          </button>
+                        )}
+                        {canManageConnections && (
+                          <>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => handleOpenEditConnection(c)}
+                            >
+                              <Pencil size={14} aria-hidden="true" />
+                              {isEditingConn ? 'Fechar' : 'Editar'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-danger btn-sm"
+                              disabled={deletingConnId === c.id}
+                              onClick={() => handleDeleteConnection(c)}
+                            >
+                              <Trash2 size={14} aria-hidden="true" />
+                              {deletingConnId === c.id ? 'Excluindo...' : 'Excluir'}
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                    {c.usageProbeSupported !== false && (
-                      <button className="btn btn-secondary btn-sm" onClick={() => handleProbeConnection(c)}>
-                        <RefreshCw size={14} /> Testar Uso
-                      </button>
+
+                    {isEditingConn && (
+                      <div
+                        className="stack-sm"
+                        style={{
+                          paddingTop: '12px',
+                          borderTop: '1px solid var(--color-border-subtle)',
+                        }}
+                      >
+                        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))' }}>
+                          <div>
+                            <label htmlFor={`edit-conn-name-${c.id}`} className="label">Nome da Conexão *</label>
+                            <input
+                              id={`edit-conn-name-${c.id}`}
+                              className="input-base"
+                              value={editConnName}
+                              onChange={(e) => setEditConnName(e.target.value)}
+                              required
+                            />
+                          </div>
+                          {c.routing?.auth !== 'none' && (
+                            <div>
+                              <label htmlFor={`edit-conn-key-${c.id}`} className="label">Nova API Key (opcional)</label>
+                              <input
+                                id={`edit-conn-key-${c.id}`}
+                                type="password"
+                                className="input-base text-mono"
+                                value={editConnApiKey}
+                                onChange={(e) => setEditConnApiKey(e.target.value)}
+                                placeholder="Deixe vazio para manter a atual"
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {isGatewayConn && (
+                          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))' }}>
+                            <div>
+                              <label htmlFor={`edit-conn-url-${c.id}`} className="label">URL Base (/v1) *</label>
+                              <input
+                                id={`edit-conn-url-${c.id}`}
+                                className="input-base text-mono"
+                                value={editConnBaseUrl}
+                                onChange={(e) => setEditConnBaseUrl(e.target.value)}
+                                required
+                              />
+                            </div>
+                            <div>
+                              <label htmlFor={`edit-conn-models-${c.id}`} className="label">Modelos (separados por vírgula)</label>
+                              <input
+                                id={`edit-conn-models-${c.id}`}
+                                className="input-base text-mono"
+                                value={editConnModelsText}
+                                onChange={(e) => setEditConnModelsText(e.target.value)}
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                          <div className="flex items-center gap-4 flex-wrap">
+                            <label className="flex items-center gap-2 text-body-sm">
+                              <span>Escopo:</span>
+                              <select
+                                aria-label="Editar escopo da conexão"
+                                className="input-base"
+                                style={{ width: 'auto' }}
+                                value={editConnOwnership}
+                                onChange={(e) => setEditConnOwnership(e.target.value as 'shared' | 'personal')}
+                              >
+                                <option value="shared">Compartilhada na empresa</option>
+                                <option value="personal">Pessoal</option>
+                              </select>
+                            </label>
+                            <label className="flex items-center gap-2 text-body-sm" style={{ cursor: 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={editConnAllAgents}
+                                onChange={(e) => setEditConnAllAgents(e.target.checked)}
+                              />
+                              <span>Liberar para todos os agentes</span>
+                            </label>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setEditingConnId(null)}
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
+                              disabled={savingConnection}
+                              onClick={() => handleSaveConnection(c)}
+                            >
+                              {savingConnection ? 'Salvando...' : 'Salvar Conexão'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     )}
                   </article>
                 )
@@ -932,6 +1296,7 @@ export function SettingsView({
                 <div className="stack-sm">
                   {adminUsers.map((u) => {
                     const isEditing = editingUserId === u.id
+                    const primaryAdmin = isPrimaryAdminEmail(u.email)
                     return (
                       <div
                         key={u.id}
@@ -949,6 +1314,9 @@ export function SettingsView({
                               <span className={cn('badge', u.isInstanceAdmin ? 'badge-brand' : 'badge-neutral')}>
                                 {u.isInstanceAdmin ? 'Admin Global' : 'Usuário de Empresa'}
                               </span>
+                              {primaryAdmin && (
+                                <span className="badge badge-info">Admin Principal</span>
+                              )}
                               <span className="badge badge-neutral">
                                 {u.activeCompanyMembershipCount}{' '}
                                 {u.activeCompanyMembershipCount === 1 ? 'empresa' : 'empresas'}
@@ -957,15 +1325,16 @@ export function SettingsView({
                             {u.email && <div className="text-caption text-secondary">{u.email}</div>}
                           </div>
 
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
-                              onClick={() => handleOpenEditAccess(u.id)}
+                              onClick={() => handleOpenEditAccount(u)}
                             >
-                              {isEditing ? 'Fechar Empresas' : 'Gerenciar Empresas'}
+                              <Pencil size={14} aria-hidden="true" />
+                              {isEditing ? 'Fechar Edição' : 'Editar Conta & Permissões'}
                             </button>
-                            {!(u.id === currentUserId && u.isInstanceAdmin) && (
+                            {!primaryAdmin && !(u.id === currentUserId && u.isInstanceAdmin) && (
                               <button
                                 type="button"
                                 className="btn btn-ghost btn-sm"
@@ -979,41 +1348,173 @@ export function SettingsView({
 
                         {isEditing && (
                           <div
-                            className="stack-sm"
+                            className="stack-md"
                             style={{
-                              paddingTop: '10px',
+                              paddingTop: '12px',
                               borderTop: '1px solid var(--color-border-subtle)',
                             }}
                           >
-                            <div className="text-caption text-secondary">
-                              Selecione as empresas que esta conta pode acessar:
+                            {primaryAdmin && (
+                              <p className="text-caption text-secondary">
+                                Conta administradora principal ({PRIMARY_ADMIN_EMAIL}) protegida — e-mail e privilégio de admin global permanecem preservados.
+                              </p>
+                            )}
+                            <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
+                              <div>
+                                <label htmlFor={`edit-user-name-${u.id}`} className="label">Nome *</label>
+                                <input
+                                  id={`edit-user-name-${u.id}`}
+                                  className="input-base"
+                                  value={editUserName}
+                                  onChange={(e) => setEditUserName(e.target.value)}
+                                  required
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`edit-user-email-${u.id}`} className="label">E-mail *</label>
+                                <input
+                                  id={`edit-user-email-${u.id}`}
+                                  type="email"
+                                  className="input-base"
+                                  value={editUserEmail}
+                                  disabled={primaryAdmin}
+                                  onChange={(e) => setEditUserEmail(e.target.value)}
+                                  required
+                                />
+                              </div>
+                              <div>
+                                <label htmlFor={`edit-user-pass-${u.id}`} className="label">Nova senha (opcional)</label>
+                                <input
+                                  id={`edit-user-pass-${u.id}`}
+                                  type="password"
+                                  minLength={8}
+                                  className="input-base"
+                                  value={editUserPassword}
+                                  onChange={(e) => setEditUserPassword(e.target.value)}
+                                  placeholder="Deixe vazio para manter"
+                                />
+                              </div>
                             </div>
-                            <div className="flex flex-wrap gap-3">
-                              {availableCompanies.map((c) => (
-                                <label
-                                  key={c.id}
-                                  className="flex items-center gap-2 text-body-sm"
-                                  style={{ cursor: 'pointer' }}
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={editingCompanyIds.includes(c.id)}
-                                    onChange={() =>
-                                      setEditingCompanyIds((prev) => toggleCompanySelection(prev, c.id))
-                                    }
-                                  />
-                                  <span>{c.name}</span>
-                                </label>
-                              ))}
+
+                            <label className="flex items-center gap-2 text-body-sm" style={{ cursor: primaryAdmin ? 'not-allowed' : 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={primaryAdmin ? true : editUserIsAdmin}
+                                disabled={primaryAdmin || (u.id === currentUserId && u.isInstanceAdmin)}
+                                onChange={(e) => setEditUserIsAdmin(e.target.checked)}
+                              />
+                              <span>Administrador Global (acesso total ao sistema)</span>
+                            </label>
+
+                            <div className="stack-sm">
+                              <div className="label">Empresas, Papéis & Permissões:</div>
+                              {availableCompanies.map((c) => {
+                                const draft = editUserCompanies[c.id] ?? {
+                                  enabled: false,
+                                  membershipRole: 'operator' as const,
+                                  status: 'active' as const,
+                                  grants: [],
+                                }
+                                return (
+                                  <div
+                                    key={c.id}
+                                    className="stack-xs"
+                                    style={{
+                                      padding: '10px',
+                                      borderRadius: '6px',
+                                      backgroundColor: 'var(--color-bg-surface)',
+                                      border: '1px solid var(--color-border-subtle)',
+                                    }}
+                                  >
+                                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                                      <label className="flex items-center gap-2 text-body-sm" style={{ cursor: 'pointer', fontWeight: 600 }}>
+                                        <input
+                                          type="checkbox"
+                                          checked={draft.enabled}
+                                          disabled={primaryAdmin && draft.enabled}
+                                          onChange={(e) =>
+                                            updateAccountCompanyDraft(c.id, { enabled: e.target.checked })
+                                          }
+                                        />
+                                        <span>{c.name}</span>
+                                      </label>
+
+                                      {draft.enabled && (
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <select
+                                            aria-label={`Papel em ${c.name}`}
+                                            className="input-base"
+                                            style={{ width: 'auto' }}
+                                            value={draft.membershipRole}
+                                            onChange={(e) =>
+                                              updateAccountCompanyDraft(c.id, {
+                                                membershipRole: e.target.value as AccountCompanyDraft['membershipRole'],
+                                              })
+                                            }
+                                          >
+                                            {COMPANY_ROLE_OPTIONS.map((opt) => (
+                                              <option key={opt.value} value={opt.value}>
+                                                {opt.label}
+                                              </option>
+                                            ))}
+                                          </select>
+                                          <select
+                                            aria-label={`Status em ${c.name}`}
+                                            className="input-base"
+                                            style={{ width: 'auto' }}
+                                            value={draft.status}
+                                            disabled={primaryAdmin}
+                                            onChange={(e) =>
+                                              updateAccountCompanyDraft(c.id, {
+                                                status: e.target.value as AccountCompanyDraft['status'],
+                                              })
+                                            }
+                                          >
+                                            <option value="active">Ativo</option>
+                                            <option value="suspended">Suspenso</option>
+                                          </select>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {draft.enabled && (
+                                      <div className="flex flex-wrap gap-3" style={{ paddingTop: '6px' }}>
+                                        {COMPANY_PERMISSION_OPTIONS.map((perm) => (
+                                          <label
+                                            key={perm.key}
+                                            className="flex items-center gap-1 text-caption"
+                                            style={{ cursor: 'pointer' }}
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              checked={draft.grants.includes(perm.key)}
+                                              onChange={() => toggleAccountPermission(c.id, perm.key)}
+                                            />
+                                            <span>{perm.label}</span>
+                                          </label>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })}
                             </div>
+
                             <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => setEditingUserId(null)}
+                              >
+                                Cancelar
+                              </button>
                               <button
                                 type="button"
                                 className="btn btn-primary btn-sm"
                                 disabled={savingAccess}
-                                onClick={() => handleSaveUserAccess(u.id)}
+                                onClick={() => handleSaveAccountEdit(u)}
                               >
-                                {savingAccess ? 'Salvando...' : 'Salvar Empresas'}
+                                {savingAccess ? 'Salvando...' : 'Salvar Conta'}
                               </button>
                             </div>
                           </div>

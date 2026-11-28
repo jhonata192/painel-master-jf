@@ -96,7 +96,7 @@ export type IssueStatus =
   | 'open'
   | 'review'
 
-export type IssuePriority = 'low' | 'medium' | 'high' | 'critical' | 'urgent'
+export type IssuePriority = 'low' | 'medium' | 'high' | 'critical'
 
 export interface IssueLabel {
   id: string
@@ -560,11 +560,13 @@ export interface AiConnection {
   method: string
   name?: string
   label?: string
+  ownership?: 'personal' | 'shared'
   status?: string
   usageProbeSupported?: boolean
   routing?: {
     kind?: string
     protocol?: string
+    auth?: 'bearer' | 'api_key' | 'none'
     baseUrl?: string
     models?: Array<string | { id: string; label?: string }>
   }
@@ -644,6 +646,10 @@ export interface UserCompanyAccessItem {
   membershipRole: string | null
   companyName: string | null
   companyStatus: string | null
+  grants?: Array<{
+    permissionKey: string
+    scope?: Record<string, unknown> | null
+  }>
 }
 
 export interface UserCompanyAccessResponse {
